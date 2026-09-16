@@ -1,0 +1,16 @@
+[
+  {
+    "id": "summary",
+    "name": "Summary"
+  },
+  {
+    "id": "customfield_10020",
+    "name": "Sprint",
+    "schema": { "type": "array", "custom": "com.pyxis.greenhopper.jira:gh-sprint" }
+  },
+  {
+    "id": "customfield_10016",
+    "name": "Story Points",
+    "schema": { "type": "number", "custom": "com.pyxis.greenhopper.jira:jsw-story-points" }
+  }
+]

@@ -1,0 +1,40 @@
+---
+source: tests/jira_issues.rs
+expression: jira.request_snapshots().await
+---
+[
+  {
+    "body": null,
+    "method": "GET",
+    "path": "/ex/jira/test-cloud/rest/api/3/user/assignable/search",
+    "query": [
+      {
+        "k": "maxResults",
+        "v": "20"
+      },
+      {
+        "k": "project",
+        "v": "DEMO"
+      }
+    ]
+  },
+  {
+    "body": null,
+    "method": "GET",
+    "path": "/ex/jira/test-cloud/rest/api/3/user/assignable/search",
+    "query": [
+      {
+        "k": "maxResults",
+        "v": "20"
+      },
+      {
+        "k": "project",
+        "v": "DEMO"
+      },
+      {
+        "k": "query",
+        "v": "Ada"
+      }
+    ]
+  }
+]

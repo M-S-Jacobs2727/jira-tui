@@ -1,0 +1,12 @@
+---
+source: tests/jira_errors.rs
+expression: jira.request_snapshots().await
+---
+[
+  {
+    "body": null,
+    "method": "DELETE",
+    "path": "/ex/jira/test-cloud/rest/api/3/issue/DEMO-1",
+    "query": []
+  }
+]

@@ -1,0 +1,22 @@
+---
+source: tests/jira_agile.rs
+expression: boards
+---
+[
+    Board {
+        id: 1,
+        name: "DEMO board",
+        board_type: "scrum",
+        project_key: Some(
+            "DEMO",
+        ),
+    },
+    Board {
+        id: 2,
+        name: "Ops kanban",
+        board_type: "kanban",
+        project_key: Some(
+            "10001",
+        ),
+    },
+]

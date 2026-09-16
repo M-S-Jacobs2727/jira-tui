@@ -1,0 +1,31 @@
+---
+source: tests/jira_issues.rs
+expression: issue_snapshot(&issue)
+---
+IssueSnapshot {
+    id: "10001",
+    key: "DEMO-1",
+    summary: "Fix checkout total",
+    issue_type: "Bug",
+    priority: Some(
+        "High",
+    ),
+    status: "In Progress",
+    assignee: Some(
+        User {
+            account_id: "acc-1",
+            display_name: "Ada Lovelace",
+        },
+    ),
+    story_points: Some(
+        5.0,
+    ),
+    description_text: "The total is wrong.",
+    comments: [
+        Comment {
+            author: "Grace Hopper",
+            created: "2026-01-02T15:04:05.000+0000",
+            body: "Looks like a rounding bug.",
+        },
+    ],
+}

@@ -1,0 +1,21 @@
+---
+source: tests/jira_agile.rs
+expression: jira.request_snapshots().await
+---
+[
+  {
+    "body": null,
+    "method": "GET",
+    "path": "/ex/jira/test-cloud/rest/agile/1.0/board/1/sprint",
+    "query": [
+      {
+        "k": "maxResults",
+        "v": "50"
+      },
+      {
+        "k": "state",
+        "v": "active,future"
+      }
+    ]
+  }
+]

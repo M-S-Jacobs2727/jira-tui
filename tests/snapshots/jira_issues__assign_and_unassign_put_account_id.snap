@@ -1,0 +1,12 @@
+---
+source: tests/jira_issues.rs
+expression: "jira.json_bodies_for(\"PUT\", \"api/3/issue/DEMO-1/assignee\").await"
+---
+[
+  {
+    "accountId": "acc-1"
+  },
+  {
+    "accountId": null
+  }
+]

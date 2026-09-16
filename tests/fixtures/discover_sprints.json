@@ -1,0 +1,32 @@
+{
+  "issues": [
+    {
+      "id": "10001",
+      "key": "DEMO-1",
+      "fields": {
+        "summary": "On active sprint",
+        "customfield_10020": [
+          { "id": 12, "name": "Sprint 12", "state": "active" }
+        ]
+      }
+    },
+    {
+      "id": "10002",
+      "key": "DEMO-2",
+      "fields": {
+        "summary": "On future sprint",
+        "sprint": [{ "id": 13, "name": "Sprint 13", "state": "future" }]
+      }
+    },
+    {
+      "id": "10003",
+      "key": "DEMO-3",
+      "fields": {
+        "summary": "Closed sprint should be ignored",
+        "customfield_10020": [
+          { "id": 10, "name": "Sprint 10", "state": "closed" }
+        ]
+      }
+    }
+  ]
+}

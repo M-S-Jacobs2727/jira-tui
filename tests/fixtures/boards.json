@@ -1,0 +1,16 @@
+{
+  "values": [
+    {
+      "id": 1,
+      "name": "DEMO board",
+      "type": "scrum",
+      "location": { "projectKey": "DEMO" }
+    },
+    {
+      "id": 2,
+      "name": "Ops kanban",
+      "type": "kanban",
+      "location": { "projectId": 10001 }
+    }
+  ]
+}

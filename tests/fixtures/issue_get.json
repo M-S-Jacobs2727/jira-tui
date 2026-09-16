@@ -1,0 +1,47 @@
+{
+  "id": "10001",
+  "key": "DEMO-1",
+  "renderedFields": {
+    "description": "<p>The total is <b>wrong</b>.</p>"
+  },
+  "names": {
+    "customfield_10016": "Story Points"
+  },
+  "fields": {
+    "summary": "Fix checkout total",
+    "issuetype": { "name": "Bug" },
+    "priority": { "name": "High" },
+    "status": { "name": "In Progress" },
+    "assignee": { "accountId": "acc-1", "displayName": "Ada Lovelace" },
+    "customfield_10016": 5,
+    "description": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [{ "type": "text", "text": "ADF fallback description" }]
+        }
+      ]
+    },
+    "comment": {
+      "comments": [
+        {
+          "author": { "displayName": "Grace Hopper" },
+          "created": "2026-01-02T15:04:05.000+0000",
+          "renderedBody": "<p>Looks like a rounding bug.</p>",
+          "body": {
+            "type": "doc",
+            "version": 1,
+            "content": [
+              {
+                "type": "paragraph",
+                "content": [{ "type": "text", "text": "ADF fallback comment" }]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

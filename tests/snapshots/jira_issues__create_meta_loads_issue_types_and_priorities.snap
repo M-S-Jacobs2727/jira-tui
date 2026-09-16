@@ -1,0 +1,41 @@
+---
+source: tests/jira_issues.rs
+expression: meta
+---
+CreateMeta {
+    issue_types: [
+        IssueType {
+            id: "10000",
+            name: "Story",
+            subtask: false,
+        },
+        IssueType {
+            id: "10001",
+            name: "Bug",
+            subtask: false,
+        },
+        IssueType {
+            id: "10002",
+            name: "Sub-task",
+            subtask: true,
+        },
+    ],
+    priorities: [
+        Priority {
+            id: "1",
+            name: "Highest",
+        },
+        Priority {
+            id: "2",
+            name: "High",
+        },
+        Priority {
+            id: "3",
+            name: "Medium",
+        },
+        Priority {
+            id: "4",
+            name: "Low",
+        },
+    ],
+}

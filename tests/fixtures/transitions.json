@@ -1,0 +1,18 @@
+{
+  "transitions": [
+    {
+      "id": "21",
+      "name": "In Progress",
+      "to": { "name": "In Progress" },
+      "fields": {}
+    },
+    {
+      "id": "31",
+      "name": "Done",
+      "to": { "name": "Done" },
+      "fields": {
+        "resolution": { "required": true }
+      }
+    }
+  ]
+}

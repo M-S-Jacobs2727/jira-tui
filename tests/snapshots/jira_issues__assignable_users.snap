@@ -1,0 +1,26 @@
+---
+source: tests/jira_issues.rs
+expression: "(all, filtered)"
+---
+(
+    [
+        User {
+            account_id: "acc-1",
+            display_name: "Ada Lovelace",
+        },
+        User {
+            account_id: "acc-2",
+            display_name: "Grace Hopper",
+        },
+    ],
+    [
+        User {
+            account_id: "acc-1",
+            display_name: "Ada Lovelace",
+        },
+        User {
+            account_id: "acc-2",
+            display_name: "Grace Hopper",
+        },
+    ],
+)

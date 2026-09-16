@@ -1,0 +1,5 @@
+---
+source: tests/jira_errors.rs
+expression: api.to_string()
+---
+Field 'summary' cannot be set.

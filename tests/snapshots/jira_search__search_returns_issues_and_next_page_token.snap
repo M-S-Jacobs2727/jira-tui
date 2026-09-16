@@ -1,0 +1,48 @@
+---
+source: tests/jira_search.rs
+expression: search_page_snapshot(&page)
+---
+SearchPageSnapshot {
+    issues: [
+        IssueSnapshot {
+            id: "10001",
+            key: "DEMO-1",
+            summary: "Fix checkout total",
+            issue_type: "Bug",
+            priority: Some(
+                "High",
+            ),
+            status: "In Progress",
+            assignee: Some(
+                User {
+                    account_id: "acc-1",
+                    display_name: "Ada Lovelace",
+                },
+            ),
+            story_points: Some(
+                5.0,
+            ),
+            description_text: "The total is wrong.",
+            comments: [],
+        },
+        IssueSnapshot {
+            id: "10002",
+            key: "DEMO-2",
+            summary: "Add empty cart state",
+            issue_type: "Story",
+            priority: Some(
+                "Medium",
+            ),
+            status: "To Do",
+            assignee: None,
+            story_points: Some(
+                3.0,
+            ),
+            description_text: "",
+            comments: [],
+        },
+    ],
+    next_page_token: Some(
+        "page-2",
+    ),
+}

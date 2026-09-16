@@ -1,0 +1,5 @@
+---
+source: tests/jira_errors.rs
+expression: api.to_string()
+---
+empty error response (404 Not Found)

@@ -1,0 +1,23 @@
+---
+source: tests/jira_search.rs
+expression: "jira.json_bodies_for(\"POST\", \"api/3/search/jql\").await"
+---
+[
+  {
+    "fields": [
+      "summary",
+      "issuetype",
+      "priority",
+      "status",
+      "assignee",
+      "comment",
+      "description",
+      "sprint",
+      "customfield_10016"
+    ],
+    "fieldsByKeys": true,
+    "jql": "project = \"DEMO\" AND sprint = 12 AND summary ~ \"checkout\" AND status in (\"In Progress\") AND issuetype in (\"Bug\") ORDER BY priority DESC",
+    "maxResults": 50,
+    "nextPageToken": "page-1"
+  }
+]

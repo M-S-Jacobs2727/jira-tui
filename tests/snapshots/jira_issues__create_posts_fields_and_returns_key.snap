@@ -1,0 +1,48 @@
+---
+source: tests/jira_issues.rs
+expression: "jira.json_bodies_for(\"POST\", \"api/3/issue\").await"
+---
+[
+  {
+    "fields": {
+      "assignee": {
+        "accountId": "acc-1"
+      },
+      "customfield_10016": 8.0,
+      "description": {
+        "content": [
+          {
+            "content": [
+              {
+                "text": "Line 1",
+                "type": "text"
+              }
+            ],
+            "type": "paragraph"
+          },
+          {
+            "content": [
+              {
+                "text": "Line 2",
+                "type": "text"
+              }
+            ],
+            "type": "paragraph"
+          }
+        ],
+        "type": "doc",
+        "version": 1
+      },
+      "issuetype": {
+        "name": "Story"
+      },
+      "priority": {
+        "name": "High"
+      },
+      "project": {
+        "key": "DEMO"
+      },
+      "summary": "New checkout flow"
+    }
+  }
+]

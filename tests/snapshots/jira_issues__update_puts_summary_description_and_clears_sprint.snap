@@ -1,0 +1,40 @@
+---
+source: tests/jira_issues.rs
+expression: "jira.json_bodies_for(\"PUT\", \"api/3/issue/DEMO-1\").await"
+---
+[
+  {
+    "fields": {
+      "customfield_10016": 8.0,
+      "customfield_10020": null,
+      "description": {
+        "content": [
+          {
+            "content": [
+              {
+                "text": "Line 1",
+                "type": "text"
+              }
+            ],
+            "type": "paragraph"
+          },
+          {
+            "content": [
+              {
+                "text": "Line 2",
+                "type": "text"
+              }
+            ],
+            "type": "paragraph"
+          }
+        ],
+        "type": "doc",
+        "version": 1
+      },
+      "priority": {
+        "name": "High"
+      },
+      "summary": "New checkout flow"
+    }
+  }
+]

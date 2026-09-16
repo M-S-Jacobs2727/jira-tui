@@ -1,0 +1,7 @@
+---
+source: tests/jira_agile.rs
+expression: field
+---
+Some(
+    "customfield_10016",
+)

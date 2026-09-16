@@ -1,0 +1,21 @@
+---
+source: tests/jira_agile.rs
+expression: sprints
+---
+[
+    Sprint {
+        id: 12,
+        name: "Sprint 12",
+        state: "active",
+    },
+    Sprint {
+        id: 13,
+        name: "Sprint 13",
+        state: "future",
+    },
+    Sprint {
+        id: 14,
+        name: "Sprint 14",
+        state: "future",
+    },
+]

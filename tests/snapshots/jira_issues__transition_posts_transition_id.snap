@@ -1,0 +1,11 @@
+---
+source: tests/jira_issues.rs
+expression: "jira.json_bodies_for(\"POST\", \"api/3/issue/DEMO-1/transitions\").await"
+---
+[
+  {
+    "transition": {
+      "id": "31"
+    }
+  }
+]

@@ -1,0 +1,16 @@
+---
+source: tests/jira_errors.rs
+expression: api
+---
+JiraApiError {
+    status: 400,
+    messages: [
+        "Field 'summary' cannot be set.",
+    ],
+    field_errors: [
+        (
+            "issuetype",
+            "Specify an issue type",
+        ),
+    ],
+}

@@ -1,0 +1,18 @@
+---
+source: tests/jira_search.rs
+expression: jira.request_snapshots().await
+---
+[
+  {
+    "body": null,
+    "method": "GET",
+    "path": "/ex/jira/test-cloud/rest/api/3/field",
+    "query": []
+  },
+  {
+    "body": null,
+    "method": "GET",
+    "path": "/ex/jira/test-cloud/rest/api/3/field",
+    "query": []
+  }
+]

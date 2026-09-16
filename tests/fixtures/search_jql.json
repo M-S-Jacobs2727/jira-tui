@@ -1,0 +1,43 @@
+{
+  "issues": [
+    {
+      "id": "10001",
+      "key": "DEMO-1",
+      "fields": {
+        "summary": "Fix checkout total",
+        "issuetype": { "name": "Bug" },
+        "priority": { "name": "High" },
+        "status": { "name": "In Progress" },
+        "assignee": { "accountId": "acc-1", "displayName": "Ada Lovelace" },
+        "customfield_10016": 5,
+        "description": {
+          "type": "doc",
+          "version": 1,
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [{ "type": "text", "text": "The total is wrong." }]
+            }
+          ]
+        },
+        "comment": { "comments": [] },
+        "sprint": [{ "id": 12, "name": "Sprint 12", "state": "active" }]
+      }
+    },
+    {
+      "id": "10002",
+      "key": "DEMO-2",
+      "fields": {
+        "summary": "Add empty cart state",
+        "issuetype": { "name": "Story" },
+        "priority": { "name": "Medium" },
+        "status": { "name": "To Do" },
+        "assignee": null,
+        "customfield_10016": 3,
+        "description": null,
+        "comment": { "comments": [] }
+      }
+    }
+  ],
+  "nextPageToken": "page-2"
+}

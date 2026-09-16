@@ -1,0 +1,6 @@
+{
+  "errorMessages": ["Field 'summary' cannot be set."],
+  "errors": {
+    "issuetype": "Specify an issue type"
+  }
+}

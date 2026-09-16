@@ -1,0 +1,16 @@
+---
+source: tests/jira_search.rs
+expression: sprints
+---
+[
+    Sprint {
+        id: 12,
+        name: "Sprint 12",
+        state: "active",
+    },
+    Sprint {
+        id: 13,
+        name: "Sprint 13",
+        state: "future",
+    },
+]
