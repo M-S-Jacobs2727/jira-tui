@@ -24,7 +24,7 @@ Login opens Atlassian in your browser and returns to `http://127.0.0.1:8787/call
 
 token-service holds the OAuth client secret in memory and uses it only to exchange an authorization code, refresh a token, or revoke a token at `auth.atlassian.com`. It does not write the secret, codes, or tokens to disk. It never receives issue content.
 
-It listens on `127.0.0.1` unless `BIND_ADDR` says otherwise. If `JIRA_TUI_TOKEN_SERVICE` points at another host, that host receives the authorization code, PKCE verifier, and any token you refresh or revoke, for that request only.
+It listens on `127.0.0.1` unless `BIND_ADDR` or `PORT` says otherwise. If `JIRA_TUI_TOKEN_SERVICE` points at another host, that host receives the authorization code, PKCE verifier, and any token you refresh or revoke, for that request only.
 
 ## Shared token-service
 

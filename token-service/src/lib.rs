@@ -40,7 +40,7 @@ impl Settings {
             client_id: required("ATLASSIAN_CLIENT_ID")?,
             client_secret: required("ATLASSIAN_CLIENT_SECRET")?,
             redirect_uri: optional(&get, "OAUTH_REDIRECT_URI", DEFAULT_REDIRECT_URI),
-            bind_addr: optional(&get, "BIND_ADDR", DEFAULT_BIND_ADDR),
+            bind_addr: bind_addr(&get),
             token_url: optional(&get, "ATLASSIAN_TOKEN_URL", DEFAULT_TOKEN_URL),
             revoke_url: optional(&get, "ATLASSIAN_REVOKE_URL", DEFAULT_REVOKE_URL),
         })
@@ -52,6 +52,22 @@ fn optional(get: &impl Fn(&str) -> Option<String>, key: &str, default: &str) -> 
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| default.to_string())
+}
+
+fn bind_addr(get: &impl Fn(&str) -> Option<String>) -> String {
+    if let Some(addr) = get("BIND_ADDR")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        return addr;
+    }
+    if let Some(port) = get("PORT")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        return format!("0.0.0.0:{port}");
+    }
+    DEFAULT_BIND_ADDR.to_string()
 }
 
 #[derive(Clone)]
@@ -238,5 +254,28 @@ mod settings_tests {
         assert_eq!(settings.redirect_uri, super::DEFAULT_REDIRECT_URI);
         assert_eq!(settings.bind_addr, super::DEFAULT_BIND_ADDR);
         assert_eq!(settings.token_url, super::DEFAULT_TOKEN_URL);
+    }
+
+    #[test]
+    fn port_binds_all_interfaces() {
+        let mut vars = HashMap::new();
+        vars.insert("ATLASSIAN_CLIENT_ID", "id");
+        vars.insert("ATLASSIAN_CLIENT_SECRET", "secret");
+        vars.insert("PORT", "8080");
+        let settings =
+            Settings::from_get(|key| vars.get(key).map(|value| (*value).to_string())).unwrap();
+        assert_eq!(settings.bind_addr, "0.0.0.0:8080");
+    }
+
+    #[test]
+    fn bind_addr_wins_over_port() {
+        let mut vars = HashMap::new();
+        vars.insert("ATLASSIAN_CLIENT_ID", "id");
+        vars.insert("ATLASSIAN_CLIENT_SECRET", "secret");
+        vars.insert("PORT", "8080");
+        vars.insert("BIND_ADDR", "127.0.0.1:9");
+        let settings =
+            Settings::from_get(|key| vars.get(key).map(|value| (*value).to_string())).unwrap();
+        assert_eq!(settings.bind_addr, "127.0.0.1:9");
     }
 }
