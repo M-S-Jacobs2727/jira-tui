@@ -76,7 +76,6 @@ impl JiraMock {
             ..StoredTokens::default()
         };
         let client = JiraClient::with_http_base(
-            "test-client-id".into(),
             CLOUD_ID.into(),
             tokens,
             Some(STORY_POINTS_FIELD.into()),

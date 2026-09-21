@@ -5,7 +5,10 @@ use ratatui::style::{Color, Modifier, Style};
 use tokio::sync::mpsc;
 use tui_textarea::TextArea;
 
-use crate::auth::oauth::{AccessibleResource, OAuthClient, authorize_url, listen_for_callback};
+use crate::auth::oauth::{
+    AccessibleResource, AuthorizeRequest, OAuthClient, authorize_url, listen_for_callback,
+    token_service_url,
+};
 use crate::auth::store::{StoredTokens, TokenStore};
 use crate::config::Config;
 use crate::error::Result;
@@ -18,47 +21,21 @@ use crate::jira::models::{
 use crate::jira::search::{AssigneeFilter, SearchBuilder, SearchFacade, SortField, SprintRef};
 use crate::ui;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LoginState {
     pub client_id: String,
-    pub client_secret: String,
-    pub focus: usize,
     pub auth_url: Option<String>,
     pub oauth_state: Option<String>,
+    pub pkce_verifier: Option<String>,
+    pub error: Option<String>,
 }
 
 impl LoginState {
-    pub fn new(client_id: impl Into<String>, client_secret: impl Into<String>) -> Self {
-        let client_id = client_id.into();
-        let focus = usize::from(!client_id.is_empty());
-        let mut state = Self {
-            client_id,
-            client_secret: client_secret.into(),
-            focus,
-            auth_url: None,
-            oauth_state: None,
-        };
-        state.refresh_auth_link();
-        state
-    }
-
-    pub fn refresh_auth_link(&mut self) {
-        let client_id = self.client_id.trim();
-        if client_id.is_empty() {
-            self.auth_url = None;
-            self.oauth_state = None;
-            return;
-        }
-        match authorize_url(client_id) {
-            Ok((url, state)) => {
-                self.auth_url = Some(url);
-                self.oauth_state = Some(state);
-            }
-            Err(_) => {
-                self.auth_url = None;
-                self.oauth_state = None;
-            }
-        }
+    pub fn ready(&self) -> bool {
+        !self.client_id.is_empty()
+            && self.auth_url.is_some()
+            && self.oauth_state.is_some()
+            && self.pkce_verifier.is_some()
     }
 }
 
@@ -159,6 +136,10 @@ pub struct Tab {
 }
 
 enum AppMsg {
+    LoginReady {
+        client_id: String,
+        auth: AuthorizeRequest,
+    },
     OauthStarted {
         url: String,
     },
@@ -241,10 +222,9 @@ async fn app_loop(
 
 impl App {
     fn new(config: Config, tokens: StoredTokens, tx: mpsc::UnboundedSender<AppMsg>) -> Self {
-        let login = LoginState::new(config.client_id.clone(), tokens.client_secret.clone());
         let mut app = Self {
             config: config.clone(),
-            screen: Screen::Login(login.clone()),
+            screen: Screen::Login(LoginState::default()),
             overlay: Overlay::None,
             tabs: Vec::new(),
             tab_idx: 0,
@@ -257,23 +237,27 @@ impl App {
             tx,
         };
 
-        if !config.client_id.is_empty() && tokens.has_refresh() && config.cloud_id.is_some() {
-            if let Ok(client) = JiraClient::new(
-                config.client_id.clone(),
-                config.cloud_id.clone().unwrap_or_default(),
-                tokens,
-                config.story_points_field.clone(),
-            ) {
-                app.client = Some(client);
-                if config.board_id.is_some() {
-                    app.screen = Screen::Main;
-                    app.refresh_board();
-                } else {
+        if tokens.has_refresh()
+            && let Some(cloud_id) = config.cloud_id.clone()
+        {
+            match JiraClient::new(cloud_id, tokens, config.story_points_field.clone()) {
+                Ok(client) => {
+                    app.client = Some(client);
+                    if config.board_id.is_some() {
+                        app.screen = Screen::Main;
+                        app.refresh_board();
+                        return app;
+                    }
                     app.status = "Select a board".into();
                     app.fetch_boards();
+                    return app;
+                }
+                Err(err) => {
+                    tracing::warn!("failed to restore session: {err}");
                 }
             }
         }
+        app.prepare_login();
         app
     }
 
@@ -312,49 +296,28 @@ impl App {
                     key.code == KeyCode::Char('o') && key.modifiers.contains(KeyModifiers::CONTROL);
                 let quit =
                     key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL);
-                let auth_url = state.auth_url.clone();
-                if !open_link && !quit {
-                    handle_login_key(state, key);
-                }
-                let ready = !state.client_id.is_empty() && !state.client_secret.is_empty();
-                let credentials = ready.then(|| {
-                    (
-                        state.client_id.clone(),
-                        state.client_secret.clone(),
-                        state.auth_url.clone(),
-                        state.oauth_state.clone(),
-                    )
-                });
-                if open_link {
-                    if let Some((id, secret, url, oauth_state)) = credentials {
-                        self.start_oauth(id, secret, url, oauth_state, config);
-                    } else if let Some(url) = auth_url {
-                        match open::that(&url) {
-                            Ok(()) => self.set_status(
-                                "opened Atlassian login; enter the client secret and press Enter to finish",
-                                false,
-                            ),
-                            Err(err) => {
-                                self.set_status(format!("could not open browser: {err}"), true)
-                            }
-                        }
-                    } else {
-                        self.set_status("enter a client id to generate the login link", true);
-                    }
+                if quit {
+                    self.should_quit = true;
                     return;
                 }
-                if key.code == KeyCode::Enter {
-                    if let Some((id, secret, url, oauth_state)) = credentials {
-                        self.start_oauth(id, secret, url, oauth_state, config);
+                let start = key.code == KeyCode::Enter || open_link;
+                if start {
+                    if state.ready() {
+                        let client_id = state.client_id.clone();
+                        let url = state.auth_url.clone();
+                        let oauth_state = state.oauth_state.clone();
+                        let pkce_verifier = state.pkce_verifier.clone();
+                        self.start_oauth(client_id, url, oauth_state, pkce_verifier, config);
+                    } else if key.code == KeyCode::Enter {
+                        self.prepare_login();
+                    } else {
+                        self.set_status("login link is not ready yet", true);
                     }
-                } else if quit {
-                    self.should_quit = true;
                 }
                 return;
             }
             Screen::OauthWait { url } => {
                 let url = url.clone();
-                let client_id = self.config.client_id.clone();
                 if key.code == KeyCode::Char('o') && key.modifiers.contains(KeyModifiers::CONTROL) {
                     if let Err(err) = open::that(&url) {
                         self.set_status(format!("could not open browser: {err}"), true);
@@ -362,7 +325,7 @@ impl App {
                     return;
                 }
                 if matches!(key.code, KeyCode::Esc | KeyCode::Char('q')) {
-                    self.screen = Screen::Login(LoginState::new(client_id, String::new()));
+                    self.prepare_login();
                 }
                 return;
             }
@@ -762,10 +725,7 @@ impl App {
             "q" | "quit" => self.should_quit = true,
             "logout" => self.logout(),
             "login" => {
-                self.screen = Screen::Login(LoginState::new(
-                    self.config.client_id.clone(),
-                    String::new(),
-                ));
+                self.prepare_login();
                 self.overlay = Overlay::None;
             }
             other => self.set_status(format!("unknown command: {other}"), true),
@@ -773,35 +733,71 @@ impl App {
         let _ = config;
     }
 
+    fn prepare_login(&mut self) {
+        self.screen = Screen::Login(LoginState::default());
+        self.set_status("contacting token service…", false);
+        self.loading = true;
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = async {
+                let oauth = OAuthClient::new()?;
+                let config = oauth.fetch_config().await?;
+                let auth = authorize_url(&config.client_id)?;
+                Ok::<_, crate::error::Error>((config.client_id, auth))
+            }
+            .await;
+            match result {
+                Ok((client_id, auth)) => {
+                    let _ = tx.send(AppMsg::LoginReady { client_id, auth });
+                }
+                Err(err) => {
+                    let _ = tx.send(AppMsg::Error(format!(
+                        "{err}. Start token-service or set JIRA_TUI_TOKEN_SERVICE (tried {})",
+                        token_service_url()
+                    )));
+                }
+            }
+        });
+    }
+
     fn start_oauth(
         &mut self,
         client_id: String,
-        client_secret: String,
         auth_url: Option<String>,
         oauth_state: Option<String>,
+        pkce_verifier: Option<String>,
         config: &mut Config,
     ) {
         self.config.client_id = client_id.clone();
         config.client_id = client_id.clone();
         let _ = config.save();
-        self.loading = true;
         self.set_status("starting OAuth…", false);
-        let prepared = match (auth_url, oauth_state) {
-            (Some(url), Some(state)) => Ok((url, state)),
-            _ => authorize_url(&client_id),
+        self.loading = true;
+        let prepared = match (auth_url, oauth_state, pkce_verifier) {
+            (Some(url), Some(state), Some(pkce_verifier)) => Ok(AuthorizeRequest {
+                url,
+                state,
+                pkce_verifier,
+            }),
+            _ if !client_id.is_empty() => authorize_url(&client_id),
+            _ => Err(crate::error::Error::auth(
+                "login is not ready; press Enter to retry",
+            )),
         };
         let tx = self.tx.clone();
         tokio::spawn(async move {
             match prepared {
-                Ok((url, state)) => {
-                    let _ = tx.send(AppMsg::OauthStarted { url: url.clone() });
-                    if let Err(err) = open::that(&url) {
+                Ok(auth) => {
+                    let _ = tx.send(AppMsg::OauthStarted {
+                        url: auth.url.clone(),
+                    });
+                    if let Err(err) = open::that(&auth.url) {
                         tracing::warn!("failed to open browser: {err}");
                     }
                     let result = async {
-                        let code = listen_for_callback(&state).await?;
-                        let oauth = OAuthClient::new(&client_id, &client_secret)?;
-                        let tokens = oauth.exchange_code(&code).await?;
+                        let code = listen_for_callback(&auth.state).await?;
+                        let oauth = OAuthClient::new()?;
+                        let tokens = oauth.exchange_code(&code, &auth.pkce_verifier).await?;
                         TokenStore::save(&tokens)?;
                         let sites = oauth.accessible_resources(&tokens.access_token).await?;
                         Ok::<_, crate::error::Error>((tokens, sites))
@@ -828,12 +824,7 @@ impl App {
         config.cloud_id = Some(site.id.clone());
         let _ = config.save();
         let tokens = TokenStore::load().unwrap_or_default();
-        match JiraClient::new(
-            self.config.client_id.clone(),
-            site.id,
-            tokens,
-            self.config.story_points_field.clone(),
-        ) {
+        match JiraClient::new(site.id, tokens, self.config.story_points_field.clone()) {
             Ok(client) => {
                 self.client = Some(client);
                 self.fetch_boards();
@@ -854,16 +845,15 @@ impl App {
 
     fn logout(&mut self) {
         self.loading = true;
-        let client_id = self.config.client_id.clone();
         let tokens = TokenStore::load().unwrap_or_default();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            if !tokens.access_token.is_empty() {
-                if let Ok(oauth) = OAuthClient::new(&client_id, &tokens.client_secret) {
-                    let _ = oauth.revoke(&tokens.access_token).await;
-                    if !tokens.refresh_token.is_empty() {
-                        let _ = oauth.revoke(&tokens.refresh_token).await;
-                    }
+            if !tokens.access_token.is_empty()
+                && let Ok(oauth) = OAuthClient::new()
+            {
+                let _ = oauth.revoke(&tokens.access_token).await;
+                if !tokens.refresh_token.is_empty() {
+                    let _ = oauth.revoke(&tokens.refresh_token).await;
                 }
             }
             let _ = TokenStore::clear();
@@ -1329,6 +1319,19 @@ impl App {
 
     fn handle_msg(&mut self, msg: AppMsg, config: &mut Config) {
         match msg {
+            AppMsg::LoginReady { client_id, auth } => {
+                if let Screen::Login(state) = &mut self.screen {
+                    state.client_id = client_id.clone();
+                    state.auth_url = Some(auth.url);
+                    state.oauth_state = Some(auth.state);
+                    state.pkce_verifier = Some(auth.pkce_verifier);
+                    state.error = None;
+                }
+                self.config.client_id = client_id.clone();
+                config.client_id = client_id;
+                let _ = config.save();
+                self.set_status("press Enter to log in", false);
+            }
             AppMsg::OauthStarted { url, .. } => {
                 self.screen = Screen::OauthWait { url };
                 self.set_status("waiting for browser authorization…", false);
@@ -1459,13 +1462,15 @@ impl App {
                 self.client = None;
                 self.tabs.clear();
                 self.overlay = Overlay::None;
-                self.screen = Screen::Login(LoginState::new(
-                    self.config.client_id.clone(),
-                    String::new(),
-                ));
+                self.prepare_login();
                 self.set_status("logged out", false);
             }
-            AppMsg::Error(err) => self.set_status(err, true),
+            AppMsg::Error(err) => {
+                if let Screen::Login(state) = &mut self.screen {
+                    state.error = Some(err.clone());
+                }
+                self.set_status(err, true);
+            }
         }
     }
 }
@@ -1583,41 +1588,6 @@ fn styled_textarea(placeholder: &str) -> TextArea<'static> {
     );
     textarea.set_cursor_line_style(Style::default());
     textarea
-}
-
-fn handle_login_key(state: &mut LoginState, key: KeyEvent) {
-    let client_id_changed = match key.code {
-        KeyCode::Tab | KeyCode::Down => {
-            state.focus = (state.focus + 1) % 2;
-            false
-        }
-        KeyCode::BackTab | KeyCode::Up => {
-            state.focus = (state.focus + 1) % 2;
-            false
-        }
-        KeyCode::Backspace => {
-            if state.focus == 0 {
-                state.client_id.pop();
-                true
-            } else {
-                state.client_secret.pop();
-                false
-            }
-        }
-        KeyCode::Char(c) => {
-            if state.focus == 0 {
-                state.client_id.push(c);
-                true
-            } else {
-                state.client_secret.push(c);
-                false
-            }
-        }
-        _ => false,
-    };
-    if client_id_changed {
-        state.refresh_auth_link();
-    }
 }
 
 fn move_sel(selected: &mut usize, len: usize, key: KeyEvent) {

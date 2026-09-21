@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use oauth2::{AuthUrl, ClientId, CsrfToken, RedirectUrl, Scope};
+use oauth2::{CsrfToken, PkceCodeChallenge};
 use reqwest::Client;
 use serde::Deserialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -13,6 +13,7 @@ use crate::error::{Error, Result};
 
 pub const REDIRECT_URI: &str = "http://127.0.0.1:8787/callback";
 pub const CALLBACK_ADDR: &str = "127.0.0.1:8787";
+pub const DEFAULT_TOKEN_SERVICE: &str = "http://127.0.0.1:8788";
 
 /// Classic Jira Cloud scopes only. Requesting Jira Software granular scopes
 /// (`*:jira-software`) causes Atlassian to return 401 "scope does not match"
@@ -20,8 +21,6 @@ pub const CALLBACK_ADDR: &str = "127.0.0.1:8787";
 pub const SCOPES: &[&str] = &["read:jira-work", "write:jira-work", "offline_access"];
 
 const AUTHORIZE_URL: &str = "https://auth.atlassian.com/authorize";
-const TOKEN_URL: &str = "https://auth.atlassian.com/oauth/token";
-const REVOKE_URL: &str = "https://auth.atlassian.com/oauth/revoke";
 const RESOURCES_URL: &str = "https://api.atlassian.com/oauth/token/accessible-resources";
 
 #[derive(Debug, Clone, Deserialize)]
@@ -43,68 +42,100 @@ struct TokenResponse {
     expires_in: u64,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenServiceConfig {
+    pub client_id: String,
+    pub redirect_uri: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct AuthorizeRequest {
+    pub url: String,
+    pub state: String,
+    pub pkce_verifier: String,
+}
+
+pub fn token_service_url() -> String {
+    std::env::var("JIRA_TUI_TOKEN_SERVICE")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_TOKEN_SERVICE.to_string())
+}
+
 pub struct OAuthClient {
     http: Client,
-    client_id: String,
-    client_secret: String,
+    token_service: String,
 }
 
 impl OAuthClient {
-    pub fn new(client_id: impl Into<String>, client_secret: impl Into<String>) -> Result<Self> {
+    pub fn new() -> Result<Self> {
+        Self::with_base(token_service_url())
+    }
+
+    pub fn with_base(token_service: impl Into<String>) -> Result<Self> {
         Ok(Self {
             http: Client::builder().timeout(Duration::from_secs(30)).build()?,
-            client_id: client_id.into(),
-            client_secret: client_secret.into(),
+            token_service: token_service.into().trim_end_matches('/').to_string(),
         })
     }
 
-    #[allow(dead_code)]
-    pub fn authorize_url_and_state(&self) -> Result<(String, String)> {
-        authorize_url(&self.client_id)
+    fn url(&self, path: &str) -> String {
+        format!("{}/{}", self.token_service, path.trim_start_matches('/'))
     }
 
-    pub async fn exchange_code(&self, code: &str) -> Result<StoredTokens> {
+    pub async fn fetch_config(&self) -> Result<TokenServiceConfig> {
+        let response = self.http.get(self.url("/v1/config")).send().await?;
+        let status = response.status();
+        let body = response.text().await?;
+        if !status.is_success() {
+            return Err(Error::auth(format!(
+                "token service config failed ({status}): {body}"
+            )));
+        }
+        let config: TokenServiceConfig = serde_json::from_str(&body)?;
+        if config.client_id.trim().is_empty() {
+            return Err(Error::auth("token service did not return a client id"));
+        }
+        if config.redirect_uri != REDIRECT_URI {
+            return Err(Error::auth(format!(
+                "token service redirect_uri {} does not match {REDIRECT_URI}",
+                config.redirect_uri
+            )));
+        }
+        Ok(config)
+    }
+
+    pub async fn exchange_code(&self, code: &str, code_verifier: &str) -> Result<StoredTokens> {
         let response = self
             .http
-            .post(TOKEN_URL)
+            .post(self.url("/v1/oauth/exchange"))
             .json(&serde_json::json!({
-                "grant_type": "authorization_code",
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
                 "code": code,
-                "redirect_uri": REDIRECT_URI,
+                "code_verifier": code_verifier,
             }))
             .send()
             .await?;
-        parse_token_response(response, &self.client_secret).await
+        parse_token_response(response).await
     }
 
     pub async fn refresh(&self, refresh_token: &str) -> Result<StoredTokens> {
         let response = self
             .http
-            .post(TOKEN_URL)
+            .post(self.url("/v1/oauth/refresh"))
             .json(&serde_json::json!({
-                "grant_type": "refresh_token",
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
                 "refresh_token": refresh_token,
             }))
             .send()
             .await?;
-        parse_token_response(response, &self.client_secret).await
+        parse_token_response(response).await
     }
 
     pub async fn revoke(&self, token: &str) -> Result<()> {
         let _ = self
             .http
-            .post(REVOKE_URL)
-            .header("Content-Type", "application/x-www-form-urlencoded")
-            .body(format!(
-                "token={}&client_id={}&client_secret={}",
-                urlencoding_token(token),
-                urlencoding_token(&self.client_id),
-                urlencoding_token(&self.client_secret),
-            ))
+            .post(self.url("/v1/oauth/revoke"))
+            .json(&serde_json::json!({ "token": token }))
             .send()
             .await;
         Ok(())
@@ -130,26 +161,27 @@ impl OAuthClient {
     }
 }
 
-pub fn authorize_url(client_id: &str) -> Result<(String, String)> {
-    let auth_url =
-        AuthUrl::new(AUTHORIZE_URL.to_string()).map_err(|e| Error::auth(e.to_string()))?;
-    let redirect =
-        RedirectUrl::new(REDIRECT_URI.to_string()).map_err(|e| Error::auth(e.to_string()))?;
-    let _client_id = ClientId::new(client_id.to_string());
+pub fn authorize_url(client_id: &str) -> Result<AuthorizeRequest> {
     let csrf = CsrfToken::new_random();
-    let mut url = Url::parse(auth_url.as_str())?;
+    let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+    let mut url = Url::parse(AUTHORIZE_URL)?;
     {
         let mut pairs = url.query_pairs_mut();
         pairs.append_pair("audience", "api.atlassian.com");
         pairs.append_pair("client_id", client_id);
         pairs.append_pair("scope", &SCOPES.join(" "));
-        pairs.append_pair("redirect_uri", redirect.as_str());
+        pairs.append_pair("redirect_uri", REDIRECT_URI);
         pairs.append_pair("state", csrf.secret());
         pairs.append_pair("response_type", "code");
         pairs.append_pair("prompt", "consent");
+        pairs.append_pair("code_challenge", pkce_challenge.as_str());
+        pairs.append_pair("code_challenge_method", pkce_challenge.method().as_ref());
     }
-    let _ = Scope::new(SCOPES.join(" "));
-    Ok((url.to_string(), csrf.secret().clone()))
+    Ok(AuthorizeRequest {
+        url: url.to_string(),
+        state: csrf.secret().clone(),
+        pkce_verifier: pkce_verifier.secret().clone(),
+    })
 }
 
 pub async fn listen_for_callback(expected_state: &str) -> Result<String> {
@@ -207,22 +239,16 @@ pub async fn listen_for_callback(expected_state: &str) -> Result<String> {
     code.ok_or_else(|| Error::auth("authorization callback did not include a code"))
 }
 
-async fn parse_token_response(
-    response: reqwest::Response,
-    client_secret: &str,
-) -> Result<StoredTokens> {
+async fn parse_token_response(response: reqwest::Response) -> Result<StoredTokens> {
     let status = response.status();
     let body = response.text().await?;
     if !status.is_success() {
         return Err(Error::auth(format!(
-            "token endpoint rejected the request ({status}): {body}"
+            "token service rejected the request ({status}): {body}"
         )));
     }
     let parsed: TokenResponse = serde_json::from_str(&body)?;
-    let mut tokens = StoredTokens {
-        client_secret: client_secret.to_string(),
-        ..StoredTokens::default()
-    };
+    let mut tokens = StoredTokens::default();
     tokens.apply_token_response(parsed.access_token, parsed.refresh_token, parsed.expires_in);
     if tokens.refresh_token.is_empty() {
         return Err(Error::auth(
@@ -232,15 +258,30 @@ async fn parse_token_response(
     Ok(tokens)
 }
 
-fn urlencoding_token(value: &str) -> String {
-    let mut encoded = String::new();
-    for b in value.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                encoded.push(b as char);
-            }
-            _ => encoded.push_str(&format!("%{b:02X}")),
-        }
+#[cfg(test)]
+mod tests {
+    use super::{REDIRECT_URI, authorize_url};
+
+    #[test]
+    fn authorize_url_includes_pkce() {
+        let request = authorize_url("client-id").unwrap();
+        let parsed = url::Url::parse(&request.url).unwrap();
+        let pairs: Vec<(String, String)> = parsed
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        assert!(
+            pairs
+                .iter()
+                .any(|(k, v)| k == "redirect_uri" && v == REDIRECT_URI)
+        );
+        assert!(pairs.iter().any(|(k, _)| k == "code_challenge"));
+        assert!(
+            pairs
+                .iter()
+                .any(|(k, v)| k == "code_challenge_method" && v == "S256")
+        );
+        assert!(!request.pkce_verifier.is_empty());
+        assert!(!request.state.is_empty());
     }
-    encoded
 }

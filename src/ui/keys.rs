@@ -22,7 +22,7 @@ pub const HELP_LINES: &[&str] = &[
     "  t                     transition",
     "",
     "Login",
-    "  Enter                 start OAuth and open the Atlassian link",
+    "  Enter                 log in with Atlassian (opens the browser)",
     "  Ctrl+o                open the generated Atlassian login link",
     "",
     "Commands",

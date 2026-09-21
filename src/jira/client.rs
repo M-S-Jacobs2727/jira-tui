@@ -18,7 +18,6 @@ pub struct JiraClient {
     http: Client,
     tokens: Arc<Mutex<StoredTokens>>,
     refresh_lock: Arc<Mutex<()>>,
-    client_id: String,
     cloud_id: String,
     story_points_field: Option<String>,
     http_base: String,
@@ -26,22 +25,14 @@ pub struct JiraClient {
 
 impl JiraClient {
     pub fn new(
-        client_id: String,
         cloud_id: String,
         tokens: StoredTokens,
         story_points_field: Option<String>,
     ) -> Result<Self> {
-        Self::with_http_base(
-            client_id,
-            cloud_id,
-            tokens,
-            story_points_field,
-            DEFAULT_HTTP_BASE,
-        )
+        Self::with_http_base(cloud_id, tokens, story_points_field, DEFAULT_HTTP_BASE)
     }
 
     pub fn with_http_base(
-        client_id: String,
         cloud_id: String,
         tokens: StoredTokens,
         story_points_field: Option<String>,
@@ -51,7 +42,6 @@ impl JiraClient {
             http: Client::builder().timeout(Duration::from_secs(45)).build()?,
             tokens: Arc::new(Mutex::new(tokens)),
             refresh_lock: Arc::new(Mutex::new(())),
-            client_id,
             cloud_id,
             story_points_field,
             http_base: http_base.into().trim_end_matches('/').to_string(),
@@ -162,17 +152,14 @@ impl JiraClient {
             }
         }
 
-        let (secret, refresh) = {
+        let refresh = {
             let tokens = self.tokens.lock().await;
-            (tokens.client_secret.clone(), tokens.refresh_token.clone())
+            tokens.refresh_token.clone()
         };
-        let oauth = OAuthClient::new(&self.client_id, &secret)?;
-        let mut refreshed = oauth.refresh(&refresh).await?;
+        let oauth = OAuthClient::new()?;
+        let refreshed = oauth.refresh(&refresh).await?;
         {
             let mut tokens = self.tokens.lock().await;
-            if refreshed.client_secret.is_empty() {
-                refreshed.client_secret = tokens.client_secret.clone();
-            }
             *tokens = refreshed.clone();
         }
         TokenStore::save(&refreshed)?;

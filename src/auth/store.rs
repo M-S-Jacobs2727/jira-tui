@@ -12,7 +12,7 @@ const ACCOUNT: &str = "oauth-tokens";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StoredTokens {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub client_secret: String,
     #[serde(default)]
     pub access_token: String,
@@ -32,7 +32,7 @@ impl StoredTokens {
     }
 
     pub fn has_refresh(&self) -> bool {
-        !self.refresh_token.is_empty() && !self.client_secret.is_empty()
+        !self.refresh_token.is_empty()
     }
 
     pub fn apply_token_response(
@@ -116,5 +116,31 @@ impl TokenStore {
         perms.set_mode(0o600);
         fs::set_permissions(&path, perms)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StoredTokens;
+
+    #[test]
+    fn has_refresh_does_not_require_client_secret() {
+        let tokens = StoredTokens {
+            refresh_token: "refresh".into(),
+            ..StoredTokens::default()
+        };
+        assert!(tokens.has_refresh());
+        assert!(tokens.client_secret.is_empty());
+    }
+
+    #[test]
+    fn omits_empty_client_secret() {
+        let tokens = StoredTokens {
+            access_token: "a".into(),
+            refresh_token: "r".into(),
+            ..StoredTokens::default()
+        };
+        let encoded = toml::to_string(&tokens).unwrap();
+        assert!(!encoded.contains("client_secret"));
     }
 }

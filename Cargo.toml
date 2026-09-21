@@ -1,3 +1,7 @@
+[workspace]
+members = ["token-service"]
+resolver = "3"
+
 [package]
 name = "jira-tui"
 version = "0.1.0"

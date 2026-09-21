@@ -6,46 +6,58 @@ A terminal UI for [Jira Cloud](https://developer.atlassian.com/cloud/jira/platfo
 
 - Rust (stable)
 - A Jira Cloud site
-- An OAuth 2.0 (3LO) app in the [Atlassian developer console](https://developer.atlassian.com/console/myapps/)
-
-## Create the OAuth app
-
-1. Open the developer console and create an app (or select an existing one).
-2. Under **Authorization**, configure **OAuth 2.0 (3LO)**.
-3. Set the callback URL to exactly:
-
-   `http://127.0.0.1:8787/callback`
-
-   Atlassian matches this string character-for-character. The TUI always binds that host and port.
-4. Under **Permissions**, add **Jira Cloud platform API**.
-5. Click **Configure** (or **Granular scopes** / **Classic scopes**) and enable these **classic** scopes. They must match the authorize URL exactly or Atlassian returns `401` / “scope does not match”:
-
-   | Scope | Why |
-   | --- | --- |
-   | `read:jira-work` | Search and read issues |
-   | `write:jira-work` | Create, edit, delete, assign, transition |
-
-   `offline_access` is requested automatically (refresh tokens). You do not add it in the console.
-
-   Adding the API is not enough — each classic scope has to be enabled. After changing scopes, use `:logout` and log in again so Atlassian re-prompts for consent.
-
-6. Copy the **Client ID** and **Secret** from the app settings.
-
-See [OAuth 2.0 (3LO) apps](https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/) and [Other integrations](https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/#other-integrations).
+- The in-repo [token-service](token-service/README.md) running (it holds the Atlassian client secret)
 
 ## Run
+
+Start the token broker (once per machine / session):
+
+```bash
+export ATLASSIAN_CLIENT_ID=...
+export ATLASSIAN_CLIENT_SECRET=...
+cargo run -p token-service
+```
+
+Then in another terminal:
 
 ```bash
 cargo run --release
 ```
 
-On first launch, enter the client id and secret. The login screen generates an Atlassian authorize URL as soon as a client id is present. Press Enter to start the local callback listener and open that link, or `Ctrl+o` to open it in the browser. If the browser does not launch, copy the cyan URL from the login or waiting screen. If several sites are available, pick one; then pick a board. Tokens and preferences are stored under the XDG config directory:
+On first launch, press Enter to log in. The TUI contacts the token service, opens Atlassian in the browser, and catches the redirect at `http://127.0.0.1:8787/callback`. `Ctrl+o` opens the link if the browser did not launch; copy the cyan URL from the login or waiting screen otherwise.
 
-- `~/.config/jira-tui/config.toml` — client id, cloud id, board, columns, last sort/filter
+Point the TUI at a non-default broker with `JIRA_TUI_TOKEN_SERVICE` (default `http://127.0.0.1:8788`).
+
+If several sites are available, pick one; then pick a board. Tokens and preferences are stored under the XDG config directory:
+
+- `~/.config/jira-tui/config.toml` — cloud id, board, columns, last sort/filter
 - `~/.config/jira-tui/credentials.toml` — tokens (mode `0600`), used if the OS keyring is unavailable
 - `~/.local/state/jira-tui/jira-tui.log` — application logs
 
 Refresh tokens rotate. Each refresh overwrites the stored pair immediately.
+
+Existing credentials from a user-owned OAuth app will not refresh through the broker. Use `:logout` and log in once.
+
+## Atlassian app (operators)
+
+Create **one** shared OAuth 2.0 (3LO) app in the [developer console](https://developer.atlassian.com/console/myapps/). End users do not create their own app. Details: [token-service/README.md](token-service/README.md).
+
+Callback URL (exact string):
+
+`http://127.0.0.1:8787/callback`
+
+Classic scopes (must match the authorize URL or Atlassian returns `401` / “scope does not match”):
+
+| Scope | Why |
+| --- | --- |
+| `read:jira-work` | Search and read issues |
+| `write:jira-work` | Create, edit, delete, assign, transition |
+
+`offline_access` is requested automatically (refresh tokens). You do not add it in the console. After changing scopes, use `:logout` and log in again so Atlassian re-prompts for consent.
+
+Enable **Distribution → sharing** so other users can consent. Until Atlassian reviews the app, they may see an unapproved-app warning.
+
+See [OAuth 2.0 (3LO) apps](https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/) and [Other integrations](https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/#other-integrations).
 
 ## Keybindings
 
@@ -75,7 +87,7 @@ Refresh tokens rotate. Each refresh overwrites the stored pair immediately.
 `~/.config/jira-tui/config.toml`:
 
 ```toml
-client_id = "..."
+client_id = "..."          # filled in after login (shared app id)
 cloud_id = "..."
 board_id = 123
 project_key = "ABC"
@@ -98,10 +110,10 @@ The story points field is discovered from the board estimation configuration whe
 - **Issues** — get / create / update / delete / assign / transition
 - **Agile** — boards, active+future sprints, board configuration
 
-Calls go to `https://api.atlassian.com/ex/jira/{cloudId}/...` with a Bearer access token.
+Calls go to `https://api.atlassian.com/ex/jira/{cloudId}/...` with a Bearer access token. Token exchange and refresh go through the token service.
 
 ## Tests
 
 ```bash
-cargo test
+cargo test --workspace
 ```

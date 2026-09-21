@@ -5,7 +5,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 
 use crate::app::{App, Overlay, Screen};
-use crate::auth::REDIRECT_URI;
 use crate::jira::search::SortField;
 use crate::ui::keys::help_lines;
 use crate::ui::{clear_popup, cursor_style, draw_labeled_input, focus_style, popup};
@@ -15,14 +14,11 @@ pub fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
         return;
     };
     clear_popup(frame, area);
-    let box_area = popup(area, 92, 20);
+    let box_area = popup(area, 92, 16);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
@@ -37,51 +33,34 @@ pub fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
         box_area,
     );
     frame.render_widget(
-        Paragraph::new("Sign in with Atlassian OAuth 2.0 (3LO)"),
+        Paragraph::new("Press Enter to log in with Atlassian"),
         chunks[0],
-    );
-    frame.render_widget(
-        Paragraph::new(format!("Register callback {REDIRECT_URI}")),
-        chunks[1],
-    );
-    draw_labeled_input(
-        frame,
-        chunks[3],
-        "client id",
-        &state.client_id,
-        state.focus == 0,
-        false,
-    );
-    draw_labeled_input(
-        frame,
-        chunks[4],
-        "client secret",
-        &state.client_secret,
-        state.focus == 1,
-        true,
     );
     frame.render_widget(
         Paragraph::new(Span::styled(
             "Atlassian login link:",
             Style::default().add_modifier(Modifier::BOLD),
         )),
-        chunks[6],
+        chunks[2],
     );
-    let auth_link = state
-        .auth_url
-        .as_deref()
-        .unwrap_or("(enter a client id to generate the Atlassian login link)");
+    let auth_link = state.auth_url.as_deref().unwrap_or_else(|| {
+        if state.error.is_some() {
+            "(token service unavailable — press Enter to retry)"
+        } else {
+            "(contacting token service…)"
+        }
+    });
     frame.render_widget(
         Paragraph::new(Span::styled(
             auth_link.to_string(),
             Style::default().fg(Color::Cyan),
         ))
         .wrap(Wrap { trim: true }),
-        chunks[7],
+        chunks[4],
     );
     frame.render_widget(
-        Paragraph::new("Tab fields   Enter start login   Ctrl+o open link   Ctrl+q quit"),
-        chunks[8],
+        Paragraph::new("Enter start login   Ctrl+o open link   Ctrl+q quit"),
+        chunks[5],
     );
 }
 
