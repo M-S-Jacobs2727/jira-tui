@@ -40,4 +40,4 @@ The redirect URI must match the TUI callback and the Atlassian app setting chara
 1. Create an OAuth 2.0 (3LO) app in the [developer console](https://developer.atlassian.com/console/myapps/).
 2. Set the callback URL to `http://127.0.0.1:8787/callback`.
 3. Enable classic scopes `read:jira-work` and `write:jira-work`.
-4. Under **Distribution**, enable sharing (privacy policy URL required) so other users can consent.
+4. Under **Distribution**, enable sharing so other users can consent. Privacy policy: [PRIVACY.md](../PRIVACY.md). Use a URL that returns HTTP 200 with no redirect (GitHub Pages is the reliable host; a blob URL often 301s).

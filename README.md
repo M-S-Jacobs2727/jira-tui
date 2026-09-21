@@ -55,7 +55,7 @@ Classic scopes (must match the authorize URL or Atlassian returns `401` / “sco
 
 `offline_access` is requested automatically (refresh tokens). You do not add it in the console. After changing scopes, use `:logout` and log in again so Atlassian re-prompts for consent.
 
-Enable **Distribution → sharing** so other users can consent. Until Atlassian reviews the app, they may see an unapproved-app warning.
+Enable **Distribution → sharing** so other users can consent. The privacy policy is [PRIVACY.md](PRIVACY.md). Until Atlassian reviews the app, they may see an unapproved-app warning.
 
 See [OAuth 2.0 (3LO) apps](https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/) and [Other integrations](https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/#other-integrations).
 
