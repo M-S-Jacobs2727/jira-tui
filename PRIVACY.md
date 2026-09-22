@@ -2,7 +2,7 @@
 
 Last updated: 21 September 2026.
 
-jira-tui and token-service do not collect data for this project. There is no account, no telemetry, and no server operated by the project. Your Jira data stays between the computer where you run jira-tui and Atlassian.
+jira-tui does not collect issue data for this project. There is no account and no telemetry. Your Jira issues stay between the computer where you run jira-tui and Atlassian. Login and token refresh go through a token service, which by default is `https://jira-tui-token-service-ptjqxekmlq-uc.a.run.app`.
 
 ## On your computer
 
@@ -18,13 +18,13 @@ Logs record failures and counts. They are not a copy of your issues or tokens.
 
 ## What leaves your computer
 
-jira-tui calls your Jira Cloud site at `api.atlassian.com` with your access token. You consent to `read:jira-work`, `write:jira-work`, and `offline_access`. Data stored in Jira is covered by Atlassian’s privacy policy.
+jira-tui calls your Jira Cloud site at `api.atlassian.com` with your access token. You consent to `read:jira-work`, `write:jira-work`, `read:jira-user`, and `offline_access`. Data stored in Jira is covered by Atlassian’s privacy policy.
 
 Login opens Atlassian in your browser and returns to `http://127.0.0.1:8787/callback` on your machine.
 
 token-service holds the OAuth client secret in memory and uses it only to exchange an authorization code, refresh a token, or revoke a token at `auth.atlassian.com`. It does not write the secret, codes, or tokens to disk. It never receives issue content.
 
-It listens on `127.0.0.1` unless `BIND_ADDR` or `PORT` says otherwise. If `JIRA_TUI_TOKEN_SERVICE` points at another host, that host receives the authorization code, PKCE verifier, and any token you refresh or revoke, for that request only.
+A local token-service listens on `127.0.0.1` unless `BIND_ADDR` or `PORT` says otherwise. The TUI uses the hosted service above unless `--token-service` or `JIRA_TUI_TOKEN_SERVICE` points somewhere else. That host receives the authorization code, PKCE verifier, and any token you refresh or revoke, for that request only.
 
 ## Shared token-service
 

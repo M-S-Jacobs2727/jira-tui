@@ -26,7 +26,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(6),
+            Constraint::Length(3),
             Constraint::Min(3),
             Constraint::Min(3),
         ])
@@ -56,7 +56,6 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
                 .map(|n| n.to_string())
                 .unwrap_or_else(|| "-".into())
         )),
-        Line::from("e edit  a assign  t transition  d delete  Esc back"),
     ];
 
     frame.render_widget(

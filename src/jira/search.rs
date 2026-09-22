@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::error::Result;
 use crate::jira::client::JiraClient;
@@ -93,25 +93,207 @@ impl SortDir {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum AssigneeFilter {
-    #[default]
-    Any,
-    Me,
-    Unassigned,
-    Account(String),
+/// Selected assignees. An empty filter matches everyone.
+///
+/// `me` is only the legacy config value. Once the current account id is known,
+/// [`AssigneeFilter::resolve_me`] folds it into `accounts` so the same person
+/// is not stored twice.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AssigneeFilter {
+    pub unassigned: bool,
+    pub accounts: Vec<String>,
+    pub me: bool,
 }
 
 impl AssigneeFilter {
-    #[allow(dead_code)]
-    pub fn as_config_string(&self) -> String {
-        match self {
-            Self::Any => "any".into(),
-            Self::Me => "me".into(),
-            Self::Unassigned => "unassigned".into(),
-            Self::Account(id) => format!("account:{id}"),
+    pub fn is_empty(&self) -> bool {
+        !self.unassigned && !self.me && self.accounts.iter().all(|id| id.trim().is_empty())
+    }
+
+    pub fn dedup_accounts(&mut self) {
+        let mut seen = Vec::new();
+        for id in self.accounts.drain(..) {
+            let id = id.trim().to_string();
+            if !id.is_empty() && !seen.iter().any(|existing: &String| existing == &id) {
+                seen.push(id);
+            }
         }
+        self.accounts = seen;
+    }
+
+    /// Replace a legacy `me` flag with the current account id, dropping a duplicate.
+    pub fn resolve_me(&mut self, self_id: &str) {
+        let self_id = self_id.trim();
+        if self_id.is_empty() {
+            self.dedup_accounts();
+            return;
+        }
+        if self.me && !self.accounts.iter().any(|id| id == self_id) {
+            self.accounts.push(self_id.to_string());
+        }
+        if self.accounts.iter().any(|id| id == self_id) {
+            self.me = false;
+        }
+        self.dedup_accounts();
+    }
+
+    pub fn toggle_account(&mut self, account_id: &str) {
+        let account_id = account_id.trim();
+        if account_id.is_empty() {
+            return;
+        }
+        if let Some(idx) = self.accounts.iter().position(|id| id == account_id) {
+            self.accounts.remove(idx);
+        } else {
+            self.accounts.push(account_id.to_string());
+        }
+        self.me = false;
+        self.dedup_accounts();
+    }
+
+    /// JQL fragment, or `None` when the filter should not constrain assignee.
+    /// A resolved current user is an account id, never `currentUser()` as well.
+    pub fn jql_clause(&self, self_id: Option<&str>) -> Option<String> {
+        let mut filter = self.clone();
+        if let Some(id) = self_id {
+            filter.resolve_me(id);
+        } else {
+            filter.dedup_accounts();
+        }
+        if filter.is_empty() {
+            return None;
+        }
+
+        let mut people = Vec::new();
+        if filter.me {
+            people.push("currentUser()".to_string());
+        }
+        for id in &filter.accounts {
+            let quoted = quote(id);
+            if !people.iter().any(|existing| existing == &quoted) {
+                people.push(quoted);
+            }
+        }
+
+        let mut parts = Vec::new();
+        match people.len() {
+            0 => {}
+            1 => parts.push(format!("assignee = {}", people[0])),
+            _ => parts.push(format!("assignee in ({})", people.join(", "))),
+        }
+        if filter.unassigned {
+            parts.push("assignee is EMPTY".into());
+        }
+        match parts.len() {
+            0 => None,
+            1 => Some(parts.remove(0)),
+            _ => Some(format!("({})", parts.join(" OR "))),
+        }
+    }
+
+    pub fn footer_label(&self, self_id: Option<&str>) -> String {
+        let mut filter = self.clone();
+        if let Some(id) = self_id {
+            filter.resolve_me(id);
+        }
+        if filter.is_empty() {
+            return String::new();
+        }
+        let mut parts = Vec::new();
+        if filter.unassigned {
+            parts.push("unassigned".to_string());
+        }
+        if filter.me {
+            parts.push("you".to_string());
+        }
+        let self_id = self_id.unwrap_or("");
+        for id in &filter.accounts {
+            if id == self_id && !self_id.is_empty() {
+                parts.push("you".to_string());
+            } else {
+                parts.push(id.clone());
+            }
+        }
+        parts.join(", ")
+    }
+}
+
+fn slice_is_empty(accounts: &&[String]) -> bool {
+    accounts.is_empty()
+}
+
+impl Serialize for AssigneeFilter {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Raw<'a> {
+            #[serde(skip_serializing_if = "std::ops::Not::not")]
+            unassigned: bool,
+            #[serde(skip_serializing_if = "slice_is_empty")]
+            accounts: &'a [String],
+            #[serde(skip_serializing_if = "std::ops::Not::not")]
+            me: bool,
+        }
+        Raw {
+            unassigned: self.unassigned,
+            accounts: &self.accounts,
+            me: self.me,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for AssigneeFilter {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Legacy(String),
+            Account {
+                account: String,
+            },
+            Set {
+                #[serde(default)]
+                unassigned: bool,
+                #[serde(default)]
+                accounts: Vec<String>,
+                #[serde(default)]
+                me: bool,
+            },
+        }
+        let filter = match Raw::deserialize(deserializer)? {
+            Raw::Legacy(value) => match value.as_str() {
+                "any" | "" => AssigneeFilter::default(),
+                "me" => AssigneeFilter {
+                    me: true,
+                    ..AssigneeFilter::default()
+                },
+                "unassigned" => AssigneeFilter {
+                    unassigned: true,
+                    ..AssigneeFilter::default()
+                },
+                other => {
+                    return Err(serde::de::Error::custom(format!(
+                        "unknown assignee filter {other}"
+                    )));
+                }
+            },
+            Raw::Account { account } => AssigneeFilter {
+                accounts: vec![account],
+                ..AssigneeFilter::default()
+            },
+            Raw::Set {
+                unassigned,
+                accounts,
+                me,
+            } => AssigneeFilter {
+                unassigned,
+                accounts,
+                me,
+            },
+        };
+        let mut filter = filter;
+        filter.dedup_accounts();
+        Ok(filter)
     }
 }
 
@@ -278,11 +460,8 @@ impl SearchBuilder {
                 .join(", ");
             clauses.push(format!("status in ({list})"));
         }
-        match &self.assignee {
-            AssigneeFilter::Any => {}
-            AssigneeFilter::Me => clauses.push("assignee = currentUser()".into()),
-            AssigneeFilter::Unassigned => clauses.push("assignee is EMPTY".into()),
-            AssigneeFilter::Account(id) => clauses.push(format!("assignee = {}", quote(id))),
+        if let Some(clause) = self.assignee.jql_clause(None) {
+            clauses.push(clause);
         }
         if !self.issue_types.is_empty() {
             let list = self
@@ -348,6 +527,7 @@ impl<'a> SearchFacade<'a> {
         if request.fields_by_keys {
             body["fieldsByKeys"] = serde_json::Value::Bool(true);
         }
+        tracing::info!(jql = %request.jql, "jira search");
         let value = self.client.post_json("api/3/search/jql", &body).await?;
         let issues = value
             .get("issues")
@@ -624,7 +804,10 @@ mod tests {
             .project("ABC")
             .sprint(SprintRef::Id(42))
             .status(["In Progress"])
-            .assignee(AssigneeFilter::Me)
+            .assignee(AssigneeFilter {
+                me: true,
+                ..AssigneeFilter::default()
+            })
             .issue_type(["Bug"])
             .text("checkout")
             .order_by(SortField::Priority, SortDir::Desc)
@@ -649,6 +832,49 @@ mod tests {
         assert!(req.jql.contains("sprint is EMPTY"));
         assert!(req.jql.contains("key = \"ABC-12\""));
         assert!(req.jql.contains("ORDER BY key ASC"));
+    }
+
+    #[test]
+    fn assignee_jql_skips_empty_and_does_not_double_count_me() {
+        assert_eq!(AssigneeFilter::default().jql_clause(None), None);
+
+        let me = AssigneeFilter {
+            me: true,
+            ..AssigneeFilter::default()
+        };
+        assert_eq!(
+            me.jql_clause(None).as_deref(),
+            Some("assignee = currentUser()")
+        );
+        assert_eq!(
+            me.jql_clause(Some("abc")).as_deref(),
+            Some("assignee = \"abc\"")
+        );
+
+        let mut both = AssigneeFilter {
+            me: true,
+            accounts: vec!["abc".into(), "other".into(), "abc".into()],
+            unassigned: true,
+        };
+        both.resolve_me("abc");
+        assert!(!both.me);
+        assert_eq!(both.accounts, vec!["abc".to_string(), "other".to_string()]);
+        assert_eq!(
+            both.jql_clause(None).as_deref(),
+            Some("(assignee in (\"abc\", \"other\") OR assignee is EMPTY)")
+        );
+    }
+
+    #[test]
+    fn assignee_filter_loads_legacy_config() {
+        let any: AssigneeFilter = serde_json::from_str("\"any\"").unwrap();
+        assert!(any.is_empty());
+        let me: AssigneeFilter = serde_json::from_str("\"me\"").unwrap();
+        assert!(me.me);
+        let unassigned: AssigneeFilter = serde_json::from_str("\"unassigned\"").unwrap();
+        assert!(unassigned.unassigned);
+        let account: AssigneeFilter = serde_json::from_str("{\"account\":\"abc\"}").unwrap();
+        assert_eq!(account.accounts, vec!["abc".to_string()]);
     }
 
     #[test]

@@ -6,19 +6,10 @@ A terminal UI for [Jira Cloud](https://developer.atlassian.com/cloud/jira/platfo
 
 - Rust (stable)
 - A Jira Cloud site
-- The in-repo [token-service](token-service/README.md) running (it holds the Atlassian client secret)
+
+The TUI talks to a hosted token service that holds the Atlassian client secret. To run that broker yourself, see [token-service/README.md](token-service/README.md).
 
 ## Run
-
-Start the token broker (once per machine / session):
-
-```bash
-export ATLASSIAN_CLIENT_ID=...
-export ATLASSIAN_CLIENT_SECRET=...
-cargo run -p token-service
-```
-
-Then in another terminal:
 
 ```bash
 cargo run --release
@@ -26,7 +17,11 @@ cargo run --release
 
 On first launch, press Enter to log in. The TUI contacts the token service, opens Atlassian in the browser, and catches the redirect at `http://127.0.0.1:8787/callback`. `Ctrl+o` opens the link if the browser did not launch; copy the cyan URL from the login or waiting screen otherwise.
 
-Point the TUI at a non-default broker with `JIRA_TUI_TOKEN_SERVICE` (default `http://127.0.0.1:8788`).
+The default token service is `https://jira-tui-token-service-ptjqxekmlq-uc.a.run.app`. Override it with `--token-service URL` or `JIRA_TUI_TOKEN_SERVICE` (the flag wins). A local broker looks like:
+
+```bash
+cargo run --release -- --token-service http://127.0.0.1:8788
+```
 
 If several sites are available, pick one; then pick a board. Tokens and preferences are stored under the XDG config directory:
 
@@ -52,6 +47,7 @@ Classic scopes (must match the authorize URL or Atlassian returns `401` / “sco
 | --- | --- |
 | `read:jira-work` | Search and read issues |
 | `write:jira-work` | Create, edit, delete, assign, transition |
+| `read:jira-user` | List assignable users for filters and issue forms |
 
 `offline_access` is requested automatically (refresh tokens). You do not add it in the console. After changing scopes, use `:logout` and log in again so Atlassian re-prompts for consent.
 
@@ -69,13 +65,14 @@ See [OAuth 2.0 (3LO) apps](https://developer.atlassian.com/cloud/jira/platform/o
 | `f` | Filter (persisted) |
 | `/` | Search current tab (session only) |
 | `r` | Refresh |
+| `p` | Change project / board |
 | `Enter` | View issue |
 | `n` / `c` | Create story |
 | `e` | Edit issue |
 | `d` | Delete issue (confirm) |
 | `a` | Assign (`Ctrl+u` unassigns) |
 | `t` | Transition |
-| `:` | Command (`logout`, `login`, `quit`) |
+| `:` | Command (`logout`, `login`, `project`, `quit`) |
 | `?` | Help |
 | `Esc` | Close overlay |
 | `q` | Quit (stays logged in) |
@@ -92,15 +89,17 @@ cloud_id = "..."
 board_id = 123
 project_key = "ABC"
 story_points_field = "customfield_10016"
-columns = ["key", "issuetype", "priority", "status", "assignee", "story_points", "summary"]
+columns = ["key", "summary", "issuetype", "priority", "status", "assignee", "story_points"]
 
 [view]
 sort_field = "priority"
 sort_dir = "desc"
 filter_statuses = []
 filter_types = []
-filter_assignee = "any"   # any | me | unassigned | { account = "..." }
+filter_assignee = { accounts = [], unassigned = false }
 ```
+
+An empty `filter_assignee` matches every assignee. Older configs (`"any"`, `"me"`, `"unassigned"`, `{ account = "..." }`) still load. `"me"` is stored as your account id once login can see it, so it is not kept alongside that id.
 
 The story points field is discovered from the board estimation configuration when possible (classic “Story Points” vs team-managed “Story point estimate”).
 

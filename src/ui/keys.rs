@@ -14,6 +14,7 @@ pub const HELP_LINES: &[&str] = &[
     "  f                     filter (persisted)",
     "  /                     search current tab (session only)",
     "  r                     refresh",
+    "  p                     change project / board",
     "  Enter                 view issue",
     "  n / c                 create story",
     "  e                     edit issue",
@@ -28,8 +29,9 @@ pub const HELP_LINES: &[&str] = &[
     "Commands",
     "  :logout               revoke tokens and return to login",
     "  :login                re-run authorization",
+    "  :project              change project / board",
     "  :quit / :q            quit",
-    "  ?                     this help",
+    "  ?                     toggle this help",
     "  Esc                   close overlay / go back",
     "  q                     quit (stays logged in)",
 ];

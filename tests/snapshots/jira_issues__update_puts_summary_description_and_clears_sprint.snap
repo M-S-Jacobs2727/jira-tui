@@ -1,10 +1,14 @@
 ---
 source: tests/jira_issues.rs
+assertion_line: 95
 expression: "jira.json_bodies_for(\"PUT\", \"api/3/issue/DEMO-1\").await"
 ---
 [
   {
     "fields": {
+      "assignee": {
+        "accountId": "acc-1"
+      },
       "customfield_10016": 8.0,
       "customfield_10020": null,
       "description": {

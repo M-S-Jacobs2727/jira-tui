@@ -6,7 +6,6 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
 use crate::app::App;
 use crate::jira::models::Issue;
-use crate::jira::search::AssigneeFilter;
 use crate::ui::Fill;
 
 pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -186,12 +185,9 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
     let view = &app.config.view;
-    let assignee = match &view.filter_assignee {
-        AssigneeFilter::Any => "any".to_string(),
-        AssigneeFilter::Me => "me".to_string(),
-        AssigneeFilter::Unassigned => "unassigned".to_string(),
-        AssigneeFilter::Account(id) => id.clone(),
-    };
+    let assignee = view
+        .filter_assignee
+        .footer_label(app.self_account_id.as_deref());
     let filter = format!(
         "status=[{}] type=[{}] assignee={assignee}",
         view.filter_statuses.join(","),

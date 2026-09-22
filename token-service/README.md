@@ -4,7 +4,7 @@ Holds the Atlassian OAuth client secret so `jira-tui` can log in without shippin
 
 The TUI still catches the browser redirect at `http://127.0.0.1:8787/callback`. This service only exchanges the authorization code, refreshes tokens, and revokes them.
 
-Point `jira-tui` at a non-default bind address with `JIRA_TUI_TOKEN_SERVICE`.
+The TUI defaults to the hosted service. Point it at this process with `--token-service URL` or `JIRA_TUI_TOKEN_SERVICE` (the flag wins).
 
 ## Run
 
@@ -41,7 +41,7 @@ The redirect URI must match the TUI callback and the Atlassian app setting chara
 
 1. Create an OAuth 2.0 (3LO) app in the [developer console](https://developer.atlassian.com/console/myapps/).
 2. Set the callback URL to `http://127.0.0.1:8787/callback`.
-3. Enable classic scopes `read:jira-work` and `write:jira-work`.
+3. Enable classic scopes `read:jira-work`, `write:jira-work`, and `read:jira-user`.
 4. Under **Distribution**, enable sharing so other users can consent. Privacy policy: [PRIVACY.md](../PRIVACY.md). Use a URL that returns HTTP 200 with no redirect (GitHub Pages is the reliable host; a blob URL often 301s).
 
 ## Docker

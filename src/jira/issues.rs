@@ -139,6 +139,10 @@ impl<'a> IssueFacade<'a> {
         {
             fields[field] = json!(points);
         }
+        fields["assignee"] = match &draft.assignee_account_id {
+            Some(id) if !id.is_empty() => json!({ "accountId": id }),
+            _ => json!({ "accountId": Value::Null }),
+        };
         if let Some(field) = SearchFacade::new(self.client).sprint_field_id().await? {
             fields[field] = match draft.sprint_id {
                 Some(id) => json!(id),
@@ -224,33 +228,122 @@ impl<'a> IssueFacade<'a> {
     }
 
     pub async fn assignable_users(&self, project_key: &str, query: &str) -> Result<Vec<User>> {
+        self.assignable_users_limited(project_key, query, 20).await
+    }
+
+    pub async fn assignable_users_limited(
+        &self,
+        project_key: &str,
+        query: &str,
+        max_results: u32,
+    ) -> Result<Vec<User>> {
         let encoded_query = encode_component(query);
         let path = if query.is_empty() {
-            format!("api/3/user/assignable/search?project={project_key}&maxResults=20")
+            format!("api/3/user/assignable/search?project={project_key}&maxResults={max_results}")
         } else {
             format!(
-                "api/3/user/assignable/search?project={project_key}&query={encoded_query}&maxResults=20"
+                "api/3/user/assignable/search?project={project_key}&query={encoded_query}&maxResults={max_results}"
             )
         };
         let value = self.client.get_json(&path).await?;
-        Ok(value
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| {
-                        Some(User {
-                            account_id: v.get("accountId")?.as_str()?.to_string(),
-                            display_name: v
-                                .get("displayName")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default()
-                                .to_string(),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default())
+        Ok(parse_users(&value))
     }
+
+    pub async fn myself(&self) -> Result<User> {
+        let value = self.client.get_json("api/3/myself").await?;
+        let account_id = value
+            .get("accountId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if account_id.is_empty() {
+            return Err(crate::error::Error::message(
+                "could not read the current user",
+            ));
+        }
+        Ok(User {
+            account_id,
+            display_name: value
+                .get("displayName")
+                .and_then(Value::as_str)
+                .unwrap_or("you")
+                .to_string(),
+        })
+    }
+
+    pub async fn project_filter_options(
+        &self,
+        project_key: &str,
+    ) -> Result<(Vec<String>, Vec<String>)> {
+        let value = self
+            .client
+            .get_json(&format!("api/3/project/{project_key}/statuses"))
+            .await?;
+        Ok(parse_project_statuses(&value))
+    }
+}
+
+fn parse_users(value: &Value) -> Vec<User> {
+    let mut users = value
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| {
+                    Some(User {
+                        account_id: v.get("accountId")?.as_str()?.to_string(),
+                        display_name: v
+                            .get("displayName")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    users.sort_by(|a, b| a.account_id.cmp(&b.account_id));
+    users.dedup_by_key(|user| user.account_id.clone());
+    users.sort_by(|a, b| {
+        a.display_name
+            .to_lowercase()
+            .cmp(&b.display_name.to_lowercase())
+            .then_with(|| a.account_id.cmp(&b.account_id))
+    });
+    users
+}
+
+fn parse_project_statuses(value: &Value) -> (Vec<String>, Vec<String>) {
+    let mut types = Vec::new();
+    let mut statuses = Vec::new();
+    let Some(issue_types) = value.as_array() else {
+        return (types, statuses);
+    };
+    for issue_type in issue_types {
+        if let Some(name) = issue_type.get("name").and_then(Value::as_str) {
+            push_unique(&mut types, name);
+        }
+        if let Some(list) = issue_type.get("statuses").and_then(Value::as_array) {
+            for status in list {
+                if let Some(name) = status.get("name").and_then(Value::as_str) {
+                    push_unique(&mut statuses, name);
+                }
+            }
+        }
+    }
+    sort_names(&mut types);
+    sort_names(&mut statuses);
+    (types, statuses)
+}
+
+fn push_unique(items: &mut Vec<String>, name: &str) {
+    let name = name.trim();
+    if !name.is_empty() && !items.iter().any(|item| item == name) {
+        items.push(name.to_string());
+    }
+}
+
+fn sort_names(items: &mut [String]) {
+    items.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
 }
 
 fn encode_component(value: &str) -> String {

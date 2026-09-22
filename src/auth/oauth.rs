@@ -1,3 +1,4 @@
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use oauth2::{CsrfToken, PkceCodeChallenge};
@@ -13,12 +14,19 @@ use crate::error::{Error, Result};
 
 pub const REDIRECT_URI: &str = "http://127.0.0.1:8787/callback";
 pub const CALLBACK_ADDR: &str = "127.0.0.1:8787";
-pub const DEFAULT_TOKEN_SERVICE: &str = "http://127.0.0.1:8788";
+pub const DEFAULT_TOKEN_SERVICE: &str = "https://jira-tui-token-service-ptjqxekmlq-uc.a.run.app";
 
 /// Classic Jira Cloud scopes only. Requesting Jira Software granular scopes
 /// (`*:jira-software`) causes Atlassian to return 401 "scope does not match"
 /// unless those exact scopes were also enabled on the OAuth app.
-pub const SCOPES: &[&str] = &["read:jira-work", "write:jira-work", "offline_access"];
+pub const SCOPES: &[&str] = &[
+    "read:jira-work",
+    "write:jira-work",
+    "read:jira-user",
+    "offline_access",
+];
+
+static TOKEN_SERVICE_URL: OnceLock<String> = OnceLock::new();
 
 const AUTHORIZE_URL: &str = "https://auth.atlassian.com/authorize";
 const RESOURCES_URL: &str = "https://api.atlassian.com/oauth/token/accessible-resources";
@@ -55,12 +63,30 @@ pub struct AuthorizeRequest {
     pub pkce_verifier: String,
 }
 
+/// Flag, then `JIRA_TUI_TOKEN_SERVICE`, then the hosted default. Stored for the process.
+pub fn configure_token_service(cli: Option<&str>) -> String {
+    let url = cli
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(token_service_from_env)
+        .unwrap_or_else(|| DEFAULT_TOKEN_SERVICE.to_string());
+    let url = url.trim_end_matches('/').to_string();
+    let _ = TOKEN_SERVICE_URL.set(url.clone());
+    TOKEN_SERVICE_URL.get().cloned().unwrap_or(url)
+}
+
 pub fn token_service_url() -> String {
+    TOKEN_SERVICE_URL.get().cloned().unwrap_or_else(|| {
+        token_service_from_env().unwrap_or_else(|| DEFAULT_TOKEN_SERVICE.to_string())
+    })
+}
+
+fn token_service_from_env() -> Option<String> {
     std::env::var("JIRA_TUI_TOKEN_SERVICE")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_TOKEN_SERVICE.to_string())
 }
 
 pub struct OAuthClient {

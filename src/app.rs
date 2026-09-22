@@ -57,7 +57,6 @@ pub enum Screen {
 
 pub enum Overlay {
     None,
-    Help,
     Sort {
         selected: usize,
     },
@@ -86,11 +85,33 @@ pub enum Overlay {
 
 #[derive(Debug, Clone)]
 pub struct FilterForm {
-    pub statuses: String,
-    pub types: String,
+    pub statuses: Vec<String>,
+    pub types: Vec<String>,
     pub assignee: AssigneeFilter,
-    pub named: String,
     pub focus: usize,
+    pub status_options: Vec<String>,
+    pub type_options: Vec<String>,
+    pub users: Vec<User>,
+    pub self_account_id: Option<String>,
+    pub loaded: bool,
+    pub pane: FilterPane,
+}
+
+#[derive(Debug, Clone)]
+pub enum FilterPane {
+    Menu,
+    Status {
+        cursor: usize,
+        draft: Vec<String>,
+    },
+    Type {
+        cursor: usize,
+        draft: Vec<String>,
+    },
+    Assignee {
+        cursor: usize,
+        draft: AssigneeFilter,
+    },
 }
 
 pub struct IssueForm {
@@ -103,8 +124,16 @@ pub struct IssueForm {
     pub priorities: Vec<Priority>,
     pub sprint_idx: usize,
     pub sprints: Vec<SprintChoice>,
+    pub assignee_idx: usize,
+    pub assignees: Vec<AssigneeChoice>,
     pub story_points: String,
     pub focus: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct AssigneeChoice {
+    pub account_id: Option<String>,
+    pub label: String,
 }
 
 #[derive(Debug, Clone)]
@@ -147,7 +176,10 @@ enum AppMsg {
         tokens: StoredTokens,
         sites: Vec<AccessibleResource>,
     },
-    Boards(Vec<Board>),
+    Boards {
+        boards: Vec<Board>,
+        choose: bool,
+    },
     Sprints(Vec<Sprint>),
     Issues {
         tab_idx: usize,
@@ -158,6 +190,14 @@ enum AppMsg {
     Issue(Issue),
     CreateMeta(CreateMeta),
     Users(Vec<User>),
+    FormUsers(Vec<User>),
+    FilterOptions {
+        statuses: Vec<String>,
+        types: Vec<String>,
+        users: Vec<User>,
+        myself: Option<User>,
+    },
+    CurrentUser(User),
     Transitions(Vec<Transition>),
     Done {
         message: String,
@@ -171,12 +211,14 @@ pub struct App {
     pub config: Config,
     pub screen: Screen,
     pub overlay: Overlay,
+    pub show_help: bool,
     pub tabs: Vec<Tab>,
     pub tab_idx: usize,
     pub status: String,
     pub status_is_error: bool,
     pub loading: bool,
     pub search_query: String,
+    pub self_account_id: Option<String>,
     pub should_quit: bool,
     client: Option<JiraClient>,
     tx: mpsc::UnboundedSender<AppMsg>,
@@ -226,12 +268,14 @@ impl App {
             config: config.clone(),
             screen: Screen::Login(LoginState::default()),
             overlay: Overlay::None,
+            show_help: false,
             tabs: Vec::new(),
             tab_idx: 0,
             status: String::new(),
             status_is_error: false,
             loading: false,
             search_query: String::new(),
+            self_account_id: None,
             should_quit: false,
             client: None,
             tx,
@@ -249,7 +293,7 @@ impl App {
                         return app;
                     }
                     app.status = "Select a board".into();
-                    app.fetch_boards();
+                    app.fetch_boards(false);
                     return app;
                 }
                 Err(err) => {
@@ -339,6 +383,11 @@ impl App {
                 return;
             }
             Screen::BoardPicker { boards, selected } => {
+                if key.code == KeyCode::Esc && self.config.board_id.is_some() {
+                    self.screen = Screen::Main;
+                    self.set_status(String::new(), false);
+                    return;
+                }
                 move_sel(selected, boards.len(), key);
                 if key.code == KeyCode::Enter {
                     if let Some(board) = boards.get(*selected).cloned() {
@@ -353,17 +402,14 @@ impl App {
     }
 
     fn handle_main_key(&mut self, key: KeyEvent, config: &mut Config) {
-        if matches!(self.overlay, Overlay::None) {
-            self.handle_board_key(key, config);
+        if self.show_help {
+            if matches!(key.code, KeyCode::Esc | KeyCode::Char('?')) {
+                self.show_help = false;
+            }
             return;
         }
-        if matches!(self.overlay, Overlay::Help) {
-            if matches!(
-                key.code,
-                KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q')
-            ) {
-                self.overlay = Overlay::None;
-            }
+        if matches!(self.overlay, Overlay::None) {
+            self.handle_board_key(key, config);
             return;
         }
         if let Overlay::Sort { selected } = &self.overlay {
@@ -425,6 +471,7 @@ impl App {
             },
             Overlay::IssueDetail { scroll, .. } => match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => self.overlay = Overlay::None,
+                KeyCode::Char('?') => self.show_help = true,
                 KeyCode::Char('j') | KeyCode::Down => *scroll = scroll.saturating_add(1),
                 KeyCode::Char('k') | KeyCode::Up => *scroll = scroll.saturating_sub(1),
                 KeyCode::Char('e') => {
@@ -464,7 +511,6 @@ impl App {
                 }
             }
             Overlay::None
-            | Overlay::Help
             | Overlay::Sort { .. }
             | Overlay::Filter(_)
             | Overlay::Assign(_)
@@ -476,7 +522,7 @@ impl App {
     fn handle_board_key(&mut self, key: KeyEvent, config: &mut Config) {
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
-            KeyCode::Char('?') => self.overlay = Overlay::Help,
+            KeyCode::Char('?') => self.show_help = true,
             KeyCode::Char(':') => {
                 self.overlay = Overlay::Command {
                     input: String::new(),
@@ -489,9 +535,8 @@ impl App {
                     .unwrap_or(0);
                 self.overlay = Overlay::Sort { selected };
             }
-            KeyCode::Char('f') => {
-                self.overlay = Overlay::Filter(FilterForm::from_view(&self.config.view));
-            }
+            KeyCode::Char('f') => self.open_filter(),
+            KeyCode::Char('p') => self.open_project_picker(),
             KeyCode::Char('/') => {
                 let mut textarea = styled_textarea("search summary or issue key");
                 if !self.search_query.is_empty() {
@@ -578,51 +623,75 @@ impl App {
         form: &mut FilterForm,
         config: &mut Config,
     ) -> bool {
+        if matches!(form.pane, FilterPane::Menu) {
+            match key.code {
+                KeyCode::Esc => return true,
+                KeyCode::Up | KeyCode::BackTab => form.focus = (form.focus + 3) % 4,
+                KeyCode::Down | KeyCode::Tab => form.focus = (form.focus + 1) % 4,
+                KeyCode::Enter if form.focus == 3 => {
+                    self.apply_filter(form, config);
+                    return true;
+                }
+                KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') if form.focus < 3 => {
+                    form.open_sub();
+                }
+                _ => {}
+            }
+            return false;
+        }
         match key.code {
-            KeyCode::Esc => return true,
-            KeyCode::Enter => {
-                self.config.view.filter_statuses = split_csv(&form.statuses);
-                self.config.view.filter_types = split_csv(&form.types);
-                self.config.view.filter_assignee =
-                    if matches!(form.assignee, AssigneeFilter::Account(_)) {
-                        if form.named.is_empty() {
-                            AssigneeFilter::Any
-                        } else {
-                            AssigneeFilter::Account(form.named.clone())
-                        }
-                    } else {
-                        form.assignee.clone()
-                    };
-                self.persist_view(config);
-                self.reload_current_tab();
-                return true;
+            KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => {
+                form.pane = FilterPane::Menu;
             }
-            KeyCode::Tab | KeyCode::Down => form.focus = (form.focus + 1) % 4,
-            KeyCode::BackTab | KeyCode::Up => form.focus = (form.focus + 3) % 4,
-            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if form.focus == 2 => {
-                form.assignee = cycle_assignee(&form.assignee);
-            }
-            KeyCode::Backspace => match form.focus {
-                0 => {
-                    form.statuses.pop();
-                }
-                1 => {
-                    form.types.pop();
-                }
-                3 => {
-                    form.named.pop();
-                }
-                _ => {}
-            },
-            KeyCode::Char(c) => match form.focus {
-                0 => form.statuses.push(c),
-                1 => form.types.push(c),
-                3 => form.named.push(c),
-                _ => {}
-            },
-            _ => {}
+            KeyCode::Enter => form.commit_sub(),
+            KeyCode::Char(' ') => form.toggle_sub(),
+            _ => form.move_sub(key),
         }
         false
+    }
+
+    fn note_self_user(&mut self, user: &User, config: &mut Config) {
+        self.self_account_id = Some(user.account_id.clone());
+        let mut assignee = self.config.view.filter_assignee.clone();
+        assignee.resolve_me(&user.account_id);
+        if assignee != self.config.view.filter_assignee {
+            self.config.view.filter_assignee = assignee;
+            self.persist_view(config);
+        }
+        if let Overlay::Filter(form) = &mut self.overlay {
+            form.self_account_id = Some(user.account_id.clone());
+            form.assignee.resolve_me(&user.account_id);
+        }
+    }
+
+    fn apply_filter(&mut self, form: &FilterForm, config: &mut Config) {
+        self.config.view.filter_statuses = form.statuses.clone();
+        self.config.view.filter_types = form.types.clone();
+        let mut assignee = form.assignee.clone();
+        if let Some(id) = form
+            .self_account_id
+            .as_deref()
+            .or(self.self_account_id.as_deref())
+        {
+            assignee.resolve_me(id);
+        }
+        self.config.view.filter_assignee = assignee;
+        self.persist_view(config);
+        self.reload_current_tab();
+    }
+
+    fn open_filter(&mut self) {
+        let mut form = FilterForm::from_view(&self.config.view);
+        form.self_account_id = self.self_account_id.clone();
+        if let Some(id) = &form.self_account_id {
+            form.assignee.resolve_me(id);
+        }
+        self.overlay = Overlay::Filter(form);
+        self.fetch_filter_options();
+    }
+
+    fn open_project_picker(&mut self) {
+        self.fetch_boards(true);
     }
 
     fn handle_issue_form_key(&mut self, key: KeyEvent) {
@@ -633,13 +702,20 @@ impl App {
             let (Overlay::Create(form) | Overlay::Edit(form)) = &mut self.overlay else {
                 return;
             };
-            if form.focus == layout.description
-                && !matches!(key.code, KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab)
-            {
-                if key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::CONTROL) {
-                    submit = true;
-                } else {
-                    form.description.input(key);
+            if form.focus == layout.description {
+                let row = form.description.cursor().0;
+                let last = form.description.lines().len().saturating_sub(1);
+                match key.code {
+                    KeyCode::Esc => close = true,
+                    KeyCode::Tab => form.focus = (form.focus + 1) % layout.count,
+                    KeyCode::BackTab => {
+                        form.focus = (form.focus + layout.count - 1) % layout.count;
+                    }
+                    KeyCode::Up if row == 0 => form.focus = layout.points,
+                    KeyCode::Down if row >= last => form.focus = layout.submit,
+                    _ => {
+                        form.description.input(key);
+                    }
                 }
             } else {
                 match key.code {
@@ -648,7 +724,10 @@ impl App {
                     KeyCode::BackTab => {
                         form.focus = (form.focus + layout.count - 1) % layout.count;
                     }
-                    KeyCode::Enter => submit = true,
+                    KeyCode::Down if form.focus < layout.cancel => form.focus += 1,
+                    KeyCode::Up if form.focus > 0 => form.focus -= 1,
+                    KeyCode::Enter if form.focus == layout.submit => submit = true,
+                    KeyCode::Enter if form.focus == layout.cancel => close = true,
                     KeyCode::Left | KeyCode::Right => {
                         let delta = if key.code == KeyCode::Left { -1 } else { 1 };
                         nudge_picker(form, &layout, delta);
@@ -667,7 +746,7 @@ impl App {
                     KeyCode::Char(c) => {
                         if form.focus == layout.summary {
                             form.summary.push(c);
-                        } else if form.focus == layout.points {
+                        } else if form.focus == layout.points && c.is_ascii_digit() {
                             form.story_points.push(c);
                         }
                     }
@@ -724,6 +803,7 @@ impl App {
         match command.trim() {
             "q" | "quit" => self.should_quit = true,
             "logout" => self.logout(),
+            "project" => self.open_project_picker(),
             "login" => {
                 self.prepare_login();
                 self.overlay = Overlay::None;
@@ -734,6 +814,7 @@ impl App {
     }
 
     fn prepare_login(&mut self) {
+        tracing::info!("starting login");
         self.screen = Screen::Login(LoginState::default());
         self.set_status("contacting token service…", false);
         self.loading = true;
@@ -771,6 +852,7 @@ impl App {
         self.config.client_id = client_id.clone();
         config.client_id = client_id.clone();
         let _ = config.save();
+        tracing::info!("opening Atlassian authorization");
         self.set_status("starting OAuth…", false);
         self.loading = true;
         let prepared = match (auth_url, oauth_state, pkce_verifier) {
@@ -796,6 +878,7 @@ impl App {
                     }
                     let result = async {
                         let code = listen_for_callback(&auth.state).await?;
+                        tracing::info!("received oauth callback");
                         let oauth = OAuthClient::new()?;
                         let tokens = oauth.exchange_code(&code, &auth.pkce_verifier).await?;
                         TokenStore::save(&tokens)?;
@@ -820,6 +903,7 @@ impl App {
     }
 
     fn select_site(&mut self, site: AccessibleResource, config: &mut Config) {
+        tracing::info!(site = %site.name, "selected site");
         self.config.cloud_id = Some(site.id.clone());
         config.cloud_id = Some(site.id.clone());
         let _ = config.save();
@@ -827,17 +911,30 @@ impl App {
         match JiraClient::new(site.id, tokens, self.config.story_points_field.clone()) {
             Ok(client) => {
                 self.client = Some(client);
-                self.fetch_boards();
+                self.fetch_boards(false);
             }
             Err(err) => self.set_status(err.to_string(), true),
         }
     }
 
     fn select_board(&mut self, board: Board, config: &mut Config) {
+        let project_changed = self.config.project_key != board.project_key;
+        tracing::info!(
+            board_id = board.id,
+            project = board.project_key.as_deref().unwrap_or(""),
+            "selected board"
+        );
         self.config.board_id = Some(board.id);
         self.config.project_key = board.project_key.clone();
         config.board_id = Some(board.id);
         config.project_key = board.project_key.clone();
+        if project_changed {
+            self.config.story_points_field = None;
+            config.story_points_field = None;
+            if let Some(client) = &mut self.client {
+                client.set_story_points_field(None);
+            }
+        }
         let _ = config.save();
         self.screen = Screen::Main;
         self.refresh_board();
@@ -867,9 +964,10 @@ impl App {
             return;
         };
         let Some(board_id) = self.config.board_id else {
-            self.fetch_boards();
+            self.fetch_boards(false);
             return;
         };
+        self.fetch_myself();
         self.loading = true;
         self.set_status("loading sprints…", false);
         let tx = self.tx.clone();
@@ -943,13 +1041,17 @@ impl App {
         });
     }
 
-    fn fetch_boards(&mut self) {
+    fn fetch_boards(&mut self, choose: bool) {
         let Some(client) = self.client.clone() else {
             return;
         };
         self.loading = true;
         self.set_status("loading boards…", false);
-        let project = self.config.project_key.clone();
+        let project = if choose {
+            None
+        } else {
+            self.config.project_key.clone()
+        };
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let agile = AgileFacade::new(&client);
@@ -962,9 +1064,64 @@ impl App {
             };
             match boards {
                 Ok(boards) => {
-                    let _ = tx.send(AppMsg::Boards(boards));
+                    let _ = tx.send(AppMsg::Boards { boards, choose });
                 }
                 Err(err) => {
+                    let _ = tx.send(AppMsg::Error(err.to_string()));
+                }
+            }
+        });
+    }
+
+    fn fetch_myself(&mut self) {
+        if self.self_account_id.is_some() {
+            return;
+        }
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            match IssueFacade::new(&client).myself().await {
+                Ok(user) => {
+                    let _ = tx.send(AppMsg::CurrentUser(user));
+                }
+                Err(err) => {
+                    tracing::warn!("could not load current user: {err}");
+                }
+            }
+        });
+    }
+
+    fn fetch_filter_options(&mut self) {
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        let Some(project) = self.config.project_key.clone() else {
+            self.set_status("no project key configured", true);
+            return;
+        };
+        let known = self.self_account_id.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let facade = IssueFacade::new(&client);
+            let options = facade.project_filter_options(&project).await;
+            let users = facade.assignable_users_limited(&project, "", 100).await;
+            let myself = if known.is_some() {
+                None
+            } else {
+                facade.myself().await.ok()
+            };
+            match (options, users) {
+                (Ok((statuses, types)), Ok(users)) => {
+                    let _ = tx.send(AppMsg::FilterOptions {
+                        statuses,
+                        types,
+                        users,
+                        myself,
+                    });
+                }
+                (Err(err), _) | (_, Err(err)) => {
                     let _ = tx.send(AppMsg::Error(err.to_string()));
                 }
             }
@@ -1011,10 +1168,14 @@ impl App {
     }
 
     fn builder_for_tab(&self, tab: &Tab) -> SearchBuilder {
+        let mut assignee = self.config.view.filter_assignee.clone();
+        if let Some(id) = &self.self_account_id {
+            assignee.resolve_me(id);
+        }
         let mut builder = SearchBuilder::new()
             .status(self.config.view.filter_statuses.clone())
             .issue_type(self.config.view.filter_types.clone())
-            .assignee(self.config.view.filter_assignee.clone())
+            .assignee(assignee)
             .order_by(self.config.view.sort_field, self.config.view.sort_dir)
             .story_points_field(self.config.story_points_field.clone())
             .text(self.search_query.clone());
@@ -1106,6 +1267,7 @@ impl App {
         form.focus = FormFocus::new().summary;
         self.overlay = Overlay::Create(form);
         self.fetch_create_meta();
+        self.fetch_form_users();
     }
 
     fn open_edit(&mut self, issue: Issue) {
@@ -1116,6 +1278,7 @@ impl App {
         form.focus = FormFocus::new().summary;
         self.overlay = Overlay::Edit(form);
         self.fetch_create_meta();
+        self.fetch_form_users();
     }
 
     fn fetch_create_meta(&mut self) {
@@ -1165,15 +1328,15 @@ impl App {
         tokio::spawn(async move {
             let facade = IssueFacade::new(&client);
             let result = if is_create {
-                facade
-                    .create(&project, &draft)
-                    .await
-                    .map(|key| format!("created {key}"))
+                facade.create(&project, &draft).await.map(|key| {
+                    tracing::info!(key = %key, "created issue");
+                    format!("created {key}")
+                })
             } else if let Some(key) = key {
-                facade
-                    .update(&key, &draft)
-                    .await
-                    .map(|()| format!("updated {key}"))
+                facade.update(&key, &draft).await.map(|()| {
+                    tracing::info!(key = %key, "updated issue");
+                    format!("updated {key}")
+                })
             } else {
                 Err(crate::error::Error::message("missing issue key"))
             };
@@ -1201,6 +1364,7 @@ impl App {
         tokio::spawn(async move {
             match IssueFacade::new(&client).delete(&key).await {
                 Ok(()) => {
+                    tracing::info!(key = %key, "deleted issue");
                     let _ = tx.send(AppMsg::Done {
                         message: format!("deleted {key}"),
                         refresh: true,
@@ -1223,6 +1387,30 @@ impl App {
             selected: 0,
         });
         self.search_users(String::new());
+    }
+
+    fn fetch_form_users(&mut self) {
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        let Some(project) = self.config.project_key.clone() else {
+            self.set_status("no project key configured", true);
+            return;
+        };
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            match IssueFacade::new(&client)
+                .assignable_users_limited(&project, "", 100)
+                .await
+            {
+                Ok(users) => {
+                    let _ = tx.send(AppMsg::FormUsers(users));
+                }
+                Err(err) => {
+                    let _ = tx.send(AppMsg::Error(err.to_string()));
+                }
+            }
+        });
     }
 
     fn search_users(&mut self, query: String) {
@@ -1261,6 +1449,7 @@ impl App {
                 .await
             {
                 Ok(()) => {
+                    tracing::info!(key = %key, "updated assignee");
                     let _ = tx.send(AppMsg::Done {
                         message: format!("updated assignee on {key}"),
                         refresh: true,
@@ -1305,6 +1494,7 @@ impl App {
         tokio::spawn(async move {
             match IssueFacade::new(&client).transition(&key, &id).await {
                 Ok(()) => {
+                    tracing::info!(key = %key, "transitioned issue");
                     let _ = tx.send(AppMsg::Done {
                         message: format!("transitioned {key}"),
                         refresh: true,
@@ -1354,21 +1544,24 @@ impl App {
                     self.screen = Screen::SitePicker { sites, selected: 0 };
                 }
             }
-            AppMsg::Boards(boards) => {
+            AppMsg::Boards { boards, choose } => {
                 if boards.is_empty() {
                     self.set_status("no boards found", true);
                     return;
                 }
-                if let Some(id) = self.config.board_id {
-                    if let Some(board) = boards.iter().find(|b| b.id == id).cloned() {
-                        self.select_board(board, config);
-                        return;
-                    }
+                if !choose
+                    && let Some(id) = self.config.board_id
+                    && let Some(board) = boards.iter().find(|b| b.id == id).cloned()
+                {
+                    self.select_board(board, config);
+                    return;
                 }
-                self.screen = Screen::BoardPicker {
-                    boards,
-                    selected: 0,
-                };
+                let selected = self
+                    .config
+                    .board_id
+                    .and_then(|id| boards.iter().position(|board| board.id == id))
+                    .unwrap_or(0);
+                self.screen = Screen::BoardPicker { boards, selected };
                 self.set_status("select a board", false);
             }
             AppMsg::Sprints(sprints) => {
@@ -1435,6 +1628,38 @@ impl App {
                     form.selected = 0;
                 }
             }
+            AppMsg::FormUsers(users) => {
+                let self_id = self.self_account_id.clone();
+                match &mut self.overlay {
+                    Overlay::Create(form) | Overlay::Edit(form) => {
+                        apply_assignees(form, users, self_id.as_deref());
+                    }
+                    _ => {}
+                }
+            }
+            AppMsg::CurrentUser(user) => {
+                self.note_self_user(&user, config);
+            }
+            AppMsg::FilterOptions {
+                statuses,
+                types,
+                users,
+                myself,
+            } => {
+                if let Some(user) = myself {
+                    self.note_self_user(&user, config);
+                }
+                if let Overlay::Filter(form) = &mut self.overlay {
+                    form.status_options = statuses;
+                    form.type_options = types;
+                    form.users = users;
+                    form.loaded = true;
+                    form.self_account_id = self.self_account_id.clone();
+                    if let Some(id) = &form.self_account_id {
+                        form.assignee.resolve_me(id);
+                    }
+                }
+            }
             AppMsg::Transitions(items) => {
                 self.overlay = Overlay::Transition { items, selected: 0 };
                 self.set_status(String::new(), false);
@@ -1477,17 +1702,148 @@ impl App {
 
 impl FilterForm {
     fn from_view(view: &crate::config::ViewConfig) -> Self {
-        let named = match &view.filter_assignee {
-            AssigneeFilter::Account(id) => id.clone(),
-            _ => String::new(),
-        };
         Self {
-            statuses: view.filter_statuses.join(", "),
-            types: view.filter_types.join(", "),
+            statuses: view.filter_statuses.clone(),
+            types: view.filter_types.clone(),
             assignee: view.filter_assignee.clone(),
-            named,
             focus: 0,
+            status_options: Vec::new(),
+            type_options: Vec::new(),
+            users: Vec::new(),
+            self_account_id: None,
+            loaded: false,
+            pane: FilterPane::Menu,
         }
+    }
+
+    fn commit_sub(&mut self) {
+        match &self.pane {
+            FilterPane::Status { draft, .. } => {
+                self.statuses = draft.clone();
+            }
+            FilterPane::Type { draft, .. } => {
+                self.types = draft.clone();
+            }
+            FilterPane::Assignee { draft, .. } => {
+                let mut draft = draft.clone();
+                if let Some(id) = &self.self_account_id {
+                    draft.resolve_me(id);
+                }
+                self.assignee = draft;
+            }
+            FilterPane::Menu => return,
+        }
+        self.pane = FilterPane::Menu;
+    }
+
+    fn toggle_sub(&mut self) {
+        let statuses = self.status_options.clone();
+        let types = self.type_options.clone();
+        let accounts: Vec<String> = self
+            .users
+            .iter()
+            .map(|user| user.account_id.clone())
+            .collect();
+        match &mut self.pane {
+            FilterPane::Status { cursor, draft } => {
+                if let Some(name) = statuses.get(*cursor) {
+                    toggle_name(draft, name);
+                }
+            }
+            FilterPane::Type { cursor, draft } => {
+                if let Some(name) = types.get(*cursor) {
+                    toggle_name(draft, name);
+                }
+            }
+            FilterPane::Assignee { cursor, draft } => {
+                if *cursor == 0 {
+                    draft.unassigned = !draft.unassigned;
+                } else if let Some(id) = accounts.get(*cursor - 1) {
+                    draft.toggle_account(id);
+                }
+            }
+            FilterPane::Menu => {}
+        }
+    }
+
+    fn move_sub(&mut self, key: KeyEvent) {
+        let status_len = self.status_options.len();
+        let type_len = self.type_options.len();
+        let assignee_len = self.users.len() + 1;
+        match &mut self.pane {
+            FilterPane::Status { cursor, .. } => move_sel(cursor, status_len, key),
+            FilterPane::Type { cursor, .. } => move_sel(cursor, type_len, key),
+            FilterPane::Assignee { cursor, .. } => move_sel(cursor, assignee_len, key),
+            FilterPane::Menu => {}
+        }
+    }
+
+    fn open_sub(&mut self) {
+        if let Some(id) = &self.self_account_id {
+            self.assignee.resolve_me(id);
+        }
+        self.pane = match self.focus {
+            0 => FilterPane::Status {
+                cursor: 0,
+                draft: self.statuses.clone(),
+            },
+            1 => FilterPane::Type {
+                cursor: 0,
+                draft: self.types.clone(),
+            },
+            2 => FilterPane::Assignee {
+                cursor: 0,
+                draft: self.assignee.clone(),
+            },
+            _ => FilterPane::Menu,
+        };
+    }
+
+    pub fn status_label(&self) -> String {
+        if self.statuses.is_empty() {
+            "any".into()
+        } else {
+            self.statuses.join(", ")
+        }
+    }
+
+    pub fn type_label(&self) -> String {
+        if self.types.is_empty() {
+            "any".into()
+        } else {
+            self.types.join(", ")
+        }
+    }
+
+    pub fn assignee_label(&self) -> String {
+        let mut assignee = self.assignee.clone();
+        if let Some(id) = &self.self_account_id {
+            assignee.resolve_me(id);
+        }
+        if assignee.is_empty() {
+            return String::new();
+        }
+        let mut parts = Vec::new();
+        if assignee.unassigned {
+            parts.push("Unassigned".to_string());
+        }
+        if assignee.me {
+            parts.push("you".to_string());
+        }
+        for id in &assignee.accounts {
+            let name = self
+                .users
+                .iter()
+                .find(|user| &user.account_id == id)
+                .map(|user| user.display_name.as_str())
+                .unwrap_or(id.as_str());
+            if self.self_account_id.as_deref() == Some(id.as_str()) {
+                parts.push(format!("{name} (you)"));
+            } else {
+                parts.push(name.to_string());
+            }
+        }
+        parts.join(", ")
     }
 }
 
@@ -1513,6 +1869,8 @@ impl IssueForm {
                 id: None,
                 name: "Backlog".into(),
             }],
+            assignee_idx: 0,
+            assignees: vec![unassigned_choice()],
             story_points: String::new(),
             focus: 0,
         }
@@ -1546,8 +1904,25 @@ impl IssueForm {
                 .unwrap_or_default(),
             story_points: issue
                 .story_points
-                .map(|n| n.to_string())
+                .map(|n| {
+                    if n.fract() == 0.0 {
+                        format!("{n:.0}")
+                    } else {
+                        format!("{n}")
+                    }
+                })
                 .unwrap_or_default(),
+            assignee_idx: usize::from(issue.assignee.is_some()),
+            assignees: {
+                let mut choices = vec![unassigned_choice()];
+                if let Some(user) = &issue.assignee {
+                    choices.push(AssigneeChoice {
+                        account_id: Some(user.account_id.clone()),
+                        label: user.display_name.clone(),
+                    });
+                }
+                choices
+            },
             sprint_idx: 0,
             sprints: vec![SprintChoice {
                 id: None,
@@ -1570,7 +1945,10 @@ impl IssueForm {
                 .priorities
                 .get(self.priority_idx)
                 .map(|p| p.name.clone()),
-            assignee_account_id: None,
+            assignee_account_id: self
+                .assignees
+                .get(self.assignee_idx)
+                .and_then(|choice| choice.account_id.clone()),
             story_points: self.story_points.parse().ok(),
             sprint_id: self.sprints.get(self.sprint_idx).and_then(|s| s.id),
         }
@@ -1680,9 +2058,12 @@ struct FormFocus {
     type_: usize,
     priority: usize,
     sprint: Option<usize>,
+    assignee: usize,
     summary: usize,
     points: usize,
     description: usize,
+    submit: usize,
+    cancel: usize,
     count: usize,
 }
 
@@ -1692,10 +2073,13 @@ impl FormFocus {
             type_: 0,
             priority: 1,
             sprint: Some(2),
-            summary: 3,
-            points: 4,
-            description: 5,
-            count: 6,
+            assignee: 3,
+            summary: 4,
+            points: 5,
+            description: 6,
+            submit: 7,
+            cancel: 8,
+            count: 9,
         }
     }
 }
@@ -1708,7 +2092,10 @@ fn cycle_idx(idx: &mut usize, len: usize, delta: isize) {
 }
 
 fn picker_focused(form: &IssueForm, layout: &FormFocus) -> bool {
-    form.focus == layout.type_ || form.focus == layout.priority || layout.sprint == Some(form.focus)
+    form.focus == layout.type_
+        || form.focus == layout.priority
+        || layout.sprint == Some(form.focus)
+        || form.focus == layout.assignee
 }
 
 fn nudge_picker(form: &mut IssueForm, layout: &FormFocus, delta: isize) {
@@ -1718,24 +2105,69 @@ fn nudge_picker(form: &mut IssueForm, layout: &FormFocus, delta: isize) {
         cycle_idx(&mut form.priority_idx, form.priorities.len(), -delta);
     } else if layout.sprint == Some(form.focus) {
         cycle_idx(&mut form.sprint_idx, form.sprints.len(), delta);
+    } else if form.focus == layout.assignee {
+        cycle_idx(&mut form.assignee_idx, form.assignees.len(), delta);
     }
 }
 
-fn split_csv(input: &str) -> Vec<String> {
-    input
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .collect()
+fn unassigned_choice() -> AssigneeChoice {
+    AssigneeChoice {
+        account_id: None,
+        label: "Unassigned".into(),
+    }
 }
 
-fn cycle_assignee(current: &AssigneeFilter) -> AssigneeFilter {
-    match current {
-        AssigneeFilter::Any => AssigneeFilter::Me,
-        AssigneeFilter::Me => AssigneeFilter::Unassigned,
-        AssigneeFilter::Unassigned => AssigneeFilter::Account(String::new()),
-        AssigneeFilter::Account(_) => AssigneeFilter::Any,
+fn apply_assignees(form: &mut IssueForm, users: Vec<User>, self_id: Option<&str>) {
+    let selected = form
+        .assignees
+        .get(form.assignee_idx)
+        .and_then(|choice| choice.account_id.clone());
+    let mut choices = vec![unassigned_choice()];
+    for user in users {
+        let you = self_id == Some(user.account_id.as_str());
+        let label = if you {
+            format!("{} (you)", user.display_name)
+        } else {
+            user.display_name.clone()
+        };
+        choices.push(AssigneeChoice {
+            account_id: Some(user.account_id),
+            label,
+        });
+    }
+    if let Some(id) = &selected {
+        if !choices
+            .iter()
+            .any(|choice| choice.account_id.as_deref() == Some(id.as_str()))
+        {
+            let label = form
+                .assignees
+                .iter()
+                .find(|choice| choice.account_id.as_deref() == Some(id.as_str()))
+                .map(|choice| choice.label.clone())
+                .unwrap_or_else(|| id.clone());
+            choices.push(AssigneeChoice {
+                account_id: Some(id.clone()),
+                label,
+            });
+        }
+    }
+    form.assignee_idx = selected
+        .as_ref()
+        .and_then(|id| {
+            choices
+                .iter()
+                .position(|choice| choice.account_id.as_deref() == Some(id.as_str()))
+        })
+        .unwrap_or(0);
+    form.assignees = choices;
+}
+
+fn toggle_name(selected: &mut Vec<String>, name: &str) {
+    if let Some(idx) = selected.iter().position(|item| item == name) {
+        selected.remove(idx);
+    } else {
+        selected.push(name.to_string());
     }
 }
 
@@ -1746,15 +2178,4 @@ fn sprint_title(sprint: &Sprint) -> String {
         other => other,
     };
     format!("{} ({tag})", sprint.name)
-}
-
-impl FilterForm {
-    pub fn assignee_label(&self) -> String {
-        match &self.assignee {
-            AssigneeFilter::Any => "any".into(),
-            AssigneeFilter::Me => "me".into(),
-            AssigneeFilter::Unassigned => "unassigned".into(),
-            AssigneeFilter::Account(_) => "named".into(),
-        }
-    }
 }

@@ -14,7 +14,7 @@ pub fn draw_issue_form(frame: &mut Frame, app: &App, area: Rect) {
         _ => return,
     };
     clear_popup(frame, area);
-    let box_area = popup(area, 84, 24);
+    let box_area = popup(area, 84, 26);
     frame.render_widget(
         Block::default().borders(Borders::ALL).title(title),
         box_area,
@@ -29,7 +29,8 @@ pub fn draw_issue_form(frame: &mut Frame, app: &App, area: Rect) {
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
-            Constraint::Min(6),
+            Constraint::Length(1),
+            Constraint::Min(5),
             Constraint::Length(1),
         ])
         .split(box_area);
@@ -59,33 +60,47 @@ pub fn draw_issue_form(frame: &mut Frame, app: &App, area: Rect) {
         form.focus == 1,
     );
     picker_field(frame, chunks[2], "sprint (←/→)", sprint, form.focus == 2);
-    draw_labeled_input(
+    let assignee = form
+        .assignees
+        .get(form.assignee_idx)
+        .map(|choice| choice.label.as_str())
+        .unwrap_or("Unassigned");
+    picker_field(
         frame,
         chunks[3],
-        "summary",
-        &form.summary,
+        "assignee (←/→)",
+        assignee,
         form.focus == 3,
-        false,
     );
     draw_labeled_input(
         frame,
         chunks[4],
+        "summary",
+        &form.summary,
+        form.focus == 4,
+        false,
+    );
+    draw_labeled_input(
+        frame,
+        chunks[5],
         "story points",
         &form.story_points,
-        form.focus == 4,
+        form.focus == 5,
         false,
     );
     let desc_block = Block::default()
         .borders(Borders::ALL)
-        .title("description (Tab to leave)")
-        .border_style(focus_style(form.focus == 5));
-    let inner = desc_block.inner(chunks[5]);
-    frame.render_widget(desc_block, chunks[5]);
+        .title("description")
+        .border_style(focus_style(form.focus == 6));
+    let inner = desc_block.inner(chunks[6]);
+    frame.render_widget(desc_block, chunks[6]);
     frame.render_widget(&form.description, inner);
-    frame.render_widget(
-        Paragraph::new("Enter submit   Ctrl+Enter from description   Esc cancel"),
-        chunks[6],
-    );
+    let buttons = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(chunks[7]);
+    draw_button(frame, buttons[0], "Submit (Enter)", form.focus == 7);
+    draw_button(frame, buttons[1], "Cancel (Esc)", form.focus == 8);
 }
 
 pub fn draw_assign(frame: &mut Frame, app: &App, area: Rect) {
@@ -149,6 +164,18 @@ pub fn draw_transition(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(
         List::new(lines).block(Block::default().borders(Borders::ALL).title("transition")),
         box_area,
+    );
+}
+
+fn draw_button(frame: &mut Frame, area: Rect, label: &str, focused: bool) {
+    let text = if focused {
+        format!("[ {label} ]")
+    } else {
+        format!("  {label}  ")
+    };
+    frame.render_widget(
+        Paragraph::new(Span::styled(text, focus_style(focused))),
+        area,
     );
 }
 

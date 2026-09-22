@@ -27,40 +27,46 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Screen::OauthWait { .. } => dialogs::draw_oauth_wait(frame, app, content),
         Screen::SitePicker { .. } => dialogs::draw_site_picker(frame, app, content),
         Screen::BoardPicker { .. } => dialogs::draw_board_picker(frame, app, content),
-        Screen::Main => match &app.overlay {
-            Overlay::IssueDetail { .. } => issue::draw(frame, app, content),
-            Overlay::Create(_) | Overlay::Edit(_) => forms::draw_issue_form(frame, app, content),
-            Overlay::Help => dialogs::draw_help(frame, content),
-            Overlay::None => board::draw(frame, app, content),
-            Overlay::Sort { .. } => {
-                board::draw(frame, app, content);
-                dialogs::draw_sort(frame, app, content);
+        Screen::Main => {
+            match &app.overlay {
+                Overlay::IssueDetail { .. } => issue::draw(frame, app, content),
+                Overlay::Create(_) | Overlay::Edit(_) => {
+                    forms::draw_issue_form(frame, app, content)
+                }
+                Overlay::None => board::draw(frame, app, content),
+                Overlay::Sort { .. } => {
+                    board::draw(frame, app, content);
+                    dialogs::draw_sort(frame, app, content);
+                }
+                Overlay::Filter(_) => {
+                    board::draw(frame, app, content);
+                    dialogs::draw_filter(frame, app, content);
+                }
+                Overlay::Search { .. } => {
+                    board::draw(frame, app, content);
+                    dialogs::draw_search(frame, app, content);
+                }
+                Overlay::Command { .. } => {
+                    board::draw(frame, app, content);
+                    dialogs::draw_command(frame, app, content);
+                }
+                Overlay::DeleteConfirm { .. } => {
+                    board::draw(frame, app, content);
+                    dialogs::draw_delete_confirm(frame, app, content);
+                }
+                Overlay::Assign(_) => {
+                    board::draw(frame, app, content);
+                    forms::draw_assign(frame, app, content);
+                }
+                Overlay::Transition { .. } => {
+                    board::draw(frame, app, content);
+                    forms::draw_transition(frame, app, content);
+                }
             }
-            Overlay::Filter(_) => {
-                board::draw(frame, app, content);
-                dialogs::draw_filter(frame, app, content);
+            if app.show_help {
+                dialogs::draw_help(frame, content);
             }
-            Overlay::Search { .. } => {
-                board::draw(frame, app, content);
-                dialogs::draw_search(frame, app, content);
-            }
-            Overlay::Command { .. } => {
-                board::draw(frame, app, content);
-                dialogs::draw_command(frame, app, content);
-            }
-            Overlay::DeleteConfirm { .. } => {
-                board::draw(frame, app, content);
-                dialogs::draw_delete_confirm(frame, app, content);
-            }
-            Overlay::Assign(_) => {
-                board::draw(frame, app, content);
-                forms::draw_assign(frame, app, content);
-            }
-            Overlay::Transition { .. } => {
-                board::draw(frame, app, content);
-                forms::draw_transition(frame, app, content);
-            }
-        },
+        }
     }
     frame.render_widget(Fill, status);
     dialogs::draw_status(frame, status, app);

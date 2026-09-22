@@ -110,12 +110,19 @@ impl JiraClient {
         if let Some(body) = body {
             attempt = attempt.json(body);
         }
-        let response = attempt.send().await?;
+        let response = match attempt.send().await {
+            Ok(response) => response,
+            Err(err) => {
+                tracing::warn!(%method, path, error = %err, "jira request failed");
+                return Err(err.into());
+            }
+        };
+        tracing::info!(%method, path, status = %response.status(), "jira request");
         if response.status() == StatusCode::UNAUTHORIZED {
             let token = self.refresh_tokens().await?;
             let mut retry = self
                 .http
-                .request(method, self.api_url(path))
+                .request(method.clone(), self.api_url(path))
                 .bearer_auth(&token)
                 .header("Accept", "application/json");
             for (k, v) in query {
@@ -124,7 +131,14 @@ impl JiraClient {
             if let Some(body) = body {
                 retry = retry.json(body);
             }
-            let retry_response = retry.send().await?;
+            let retry_response = match retry.send().await {
+                Ok(response) => response,
+                Err(err) => {
+                    tracing::warn!(%method, path, error = %err, "jira request failed");
+                    return Err(err.into());
+                }
+            };
+            tracing::info!(%method, path, status = %retry_response.status(), "jira request");
             return read_json_or_error(retry_response).await;
         }
         read_json_or_error(response).await
@@ -246,18 +260,21 @@ async fn read_json_or_error(response: reqwest::Response) -> Result<Value> {
         if status.is_success() {
             return Ok(Value::Null);
         }
-        return Err(JiraApiError {
+        let err = JiraApiError {
             status: status.as_u16(),
             messages: vec![format!("empty error response ({status})")],
             field_errors: Vec::new(),
-        }
-        .into());
+        };
+        tracing::warn!(status = status.as_u16(), message = %err, "jira request failed");
+        return Err(err.into());
     }
     let value: Value = serde_json::from_str(&text).unwrap_or_else(|_| Value::String(text.clone()));
     if status.is_success() {
         return Ok(value);
     }
-    Err(jira_error(status.as_u16(), &value, &text).into())
+    let err = jira_error(status.as_u16(), &value, &text);
+    tracing::warn!(status = status.as_u16(), message = %err, "jira request failed");
+    Err(err.into())
 }
 
 fn jira_error(status: u16, value: &Value, raw: &str) -> JiraApiError {
@@ -294,7 +311,7 @@ fn jira_error(status: u16, value: &Value, raw: &str) -> JiraApiError {
             .any(|m| m.to_ascii_lowercase().contains("scope"))
     {
         messages.push(
-            "enable classic scopes read:jira-work and write:jira-work on the OAuth app, then :logout and log in again".into(),
+            "enable classic scopes read:jira-work, write:jira-work, and read:jira-user on the OAuth app, then :logout and log in again".into(),
         );
     }
     JiraApiError {

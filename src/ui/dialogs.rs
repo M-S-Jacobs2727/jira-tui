@@ -6,8 +6,8 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 
 use crate::app::{App, Overlay, Screen};
 use crate::jira::search::SortField;
-use crate::ui::keys::help_lines;
-use crate::ui::{clear_popup, cursor_style, draw_labeled_input, focus_style, popup};
+use crate::ui::keys::{HELP_LINES, help_lines};
+use crate::ui::{clear_popup, cursor_style, focus_style, popup};
 
 pub fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
     let Screen::Login(state) = &app.screen else {
@@ -133,10 +133,17 @@ pub fn draw_board_picker(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 pub fn draw_help(frame: &mut Frame, area: Rect) {
-    clear_popup(frame, area);
-    let box_area = popup(area, 72, 28);
+    let height = u16::try_from(HELP_LINES.len())
+        .unwrap_or(u16::MAX)
+        .saturating_add(2);
+    let box_area = popup(area, 72, height);
+    clear_popup(frame, box_area);
     frame.render_widget(
-        Paragraph::new(help_lines()).block(Block::default().borders(Borders::ALL).title("help")),
+        Paragraph::new(help_lines()).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("help  ?/Esc close"),
+        ),
         box_area,
     );
 }
@@ -168,7 +175,38 @@ pub fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
     let Overlay::Filter(form) = &app.overlay else {
         return;
     };
-    let box_area = popup(area, 64, 12);
+    match &form.pane {
+        crate::app::FilterPane::Menu => draw_filter_menu(frame, form, area),
+        crate::app::FilterPane::Status { cursor, draft } => {
+            draw_checklist(
+                frame,
+                area,
+                "filter status",
+                &form.status_options,
+                draft,
+                *cursor,
+                form.loaded,
+            );
+        }
+        crate::app::FilterPane::Type { cursor, draft } => {
+            draw_checklist(
+                frame,
+                area,
+                "filter type",
+                &form.type_options,
+                draft,
+                *cursor,
+                form.loaded,
+            );
+        }
+        crate::app::FilterPane::Assignee { cursor, draft } => {
+            draw_assignee_checklist(frame, form, area, draft, *cursor);
+        }
+    }
+}
+
+fn draw_filter_menu(frame: &mut Frame, form: &crate::app::FilterForm, area: Rect) {
+    let box_area = popup(area, 64, 10);
     clear_popup(frame, box_area);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -186,50 +224,134 @@ pub fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
         Block::default().borders(Borders::ALL).title("filter"),
         box_area,
     );
-    draw_labeled_input(
+    menu_row(
         frame,
         chunks[0],
-        "statuses (csv)",
-        &form.statuses,
+        "status",
+        &form.status_label(),
         form.focus == 0,
-        false,
     );
-    draw_labeled_input(
+    menu_row(
         frame,
         chunks[1],
-        "types (csv)",
-        &form.types,
+        "type",
+        &form.type_label(),
         form.focus == 1,
-        false,
     );
-    let assignee = form.assignee_label();
-    let assignee_style = if form.focus == 2 {
-        focus_style(true)
+    menu_row(
+        frame,
+        chunks[2],
+        "assignee",
+        &form.assignee_label(),
+        form.focus == 2,
+    );
+    menu_row(frame, chunks[3], "apply", "", form.focus == 3);
+    frame.render_widget(
+        Paragraph::new("Enter open or apply   Esc cancel"),
+        chunks[5],
+    );
+}
+
+fn menu_row(frame: &mut Frame, area: Rect, label: &str, value: &str, focused: bool) {
+    let shown = if value.is_empty() {
+        String::new()
     } else {
-        Style::default()
+        format!("  {value}")
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
-                "assignee (←/→): ",
+                format!("{label}:"),
                 Style::default().add_modifier(Modifier::BOLD),
             ),
-            Span::styled(assignee, assignee_style),
+            Span::styled(shown, focus_style(focused)),
         ])),
-        chunks[2],
+        area,
     );
-    draw_labeled_input(
-        frame,
-        chunks[3],
-        "named account/id",
-        &form.named,
-        form.focus == 3,
-        false,
-    );
+}
+
+fn draw_checklist(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    options: &[String],
+    selected: &[String],
+    cursor: usize,
+    loaded: bool,
+) {
+    let box_area = popup(area, 56, 18);
+    clear_popup(frame, box_area);
+    let items = if options.is_empty() {
+        vec![ListItem::new(if loaded {
+            "no options"
+        } else {
+            "loading…"
+        })]
+    } else {
+        options
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let mark = if selected.iter().any(|item| item == name) {
+                    "[x]"
+                } else {
+                    "[ ]"
+                };
+                let prefix = if i == cursor { ">" } else { " " };
+                ListItem::new(format!("{prefix} {mark} {name}"))
+            })
+            .collect()
+    };
     frame.render_widget(
-        Paragraph::new("Enter apply (saved)   Esc cancel"),
-        chunks[5],
+        List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!("{title}   space toggle   Enter back")),
+        ),
+        box_area,
     );
+}
+
+fn draw_assignee_checklist(
+    frame: &mut Frame,
+    form: &crate::app::FilterForm,
+    area: Rect,
+    draft: &crate::jira::search::AssigneeFilter,
+    cursor: usize,
+) {
+    let box_area = popup(area, 56, 18);
+    clear_popup(frame, box_area);
+    let mut rows = vec![checklist_row(cursor == 0, draft.unassigned, "Unassigned")];
+    if form.users.is_empty() {
+        rows.push(ListItem::new(if form.loaded {
+            "  no assignees"
+        } else {
+            "  loading…"
+        }));
+    }
+    for (i, user) in form.users.iter().enumerate() {
+        let checked = draft.accounts.iter().any(|id| id == &user.account_id);
+        let label = if form.self_account_id.as_deref() == Some(user.account_id.as_str()) {
+            format!("{} (you)", user.display_name)
+        } else {
+            user.display_name.clone()
+        };
+        rows.push(checklist_row(cursor == i + 1, checked, &label));
+    }
+    frame.render_widget(
+        List::new(rows).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("filter assignee   space toggle   Enter back"),
+        ),
+        box_area,
+    );
+}
+
+fn checklist_row(cursor: bool, checked: bool, label: &str) -> ListItem<'static> {
+    let mark = if checked { "[x]" } else { "[ ]" };
+    let prefix = if cursor { ">" } else { " " };
+    ListItem::new(format!("{prefix} {mark} {label}"))
 }
 
 pub fn draw_search(frame: &mut Frame, app: &App, area: Rect) {
