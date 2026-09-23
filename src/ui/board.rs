@@ -25,7 +25,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_tabs(frame: &mut Frame, app: &App, area: Rect) {
-    let board = app.config.project_key.as_deref().unwrap_or("Jira");
+    let board = app.config.project_key().unwrap_or("Jira");
     let title = if app.tabs.is_empty() {
         board.to_string()
     } else {
@@ -134,7 +134,7 @@ fn truncate_label(label: &str, max: usize) -> String {
 }
 
 fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
-    let columns = app.config.columns.clone();
+    let columns = app.config.columns();
     let widths = column_widths(&columns, area.width);
     // Table lays out columns in the area left after borders and the "> " highlight.
     let cell_area = area.width.saturating_sub(4);
@@ -146,7 +146,7 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
     }))
     .height(1);
 
-    let story_points_field = app.config.story_points_field.clone();
+    let story_points_field = app.config.story_points_field_cloned();
     let selected = app.current_tab().map(|t| t.selected).unwrap_or(0);
     let issue_count = app.current_tab().map(|t| t.issues.len()).unwrap_or(0);
     let has_next = app

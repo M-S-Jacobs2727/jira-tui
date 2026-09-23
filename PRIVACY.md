@@ -9,12 +9,12 @@ jira-tui does not collect issue data for this project. There is no account and n
 jira-tui stores:
 
 - OAuth access and refresh tokens in the OS keyring and in `~/.config/jira-tui/credentials.toml` (mode `0600`)
-- The OAuth client id, selected site, and board in `~/.config/jira-tui/config.toml`
+- The OAuth client id, selected site, and remembered boards (project key, story points field, columns) in `~/.config/jira-tui/config.toml`
 - Operational logs in `~/.local/state/jira-tui/`
 
 Logs record failures and counts. They are not a copy of your issues or tokens.
 
-`:logout` revokes the tokens at Atlassian and deletes the local copies. Preferences (site, board) stay until you delete the config file. Uninstalling is deleting those files and the keyring entry named `jira-tui` / `oauth-tokens`.
+`:logout` revokes the tokens at Atlassian and deletes the local copies. Preferences (site, boards) stay until you delete the config file. Uninstalling is deleting those files and the keyring entry named `jira-tui` / `oauth-tokens`.
 
 ## What leaves your computer
 

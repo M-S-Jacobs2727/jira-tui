@@ -300,7 +300,7 @@ impl App {
         if tokens.has_refresh()
             && let Some(cloud_id) = config.cloud_id.clone()
         {
-            match JiraClient::new(cloud_id, tokens, config.story_points_field.clone()) {
+            match JiraClient::new(cloud_id, tokens, config.story_points_field_cloned()) {
                 Ok(client) => {
                     app.client = Some(client);
                     if config.board_id.is_some() {
@@ -974,7 +974,7 @@ impl App {
         config.cloud_id = Some(site.id.clone());
         let _ = config.save();
         let tokens = TokenStore::load().unwrap_or_default();
-        match JiraClient::new(site.id, tokens, self.config.story_points_field.clone()) {
+        match JiraClient::new(site.id, tokens, self.config.story_points_field_cloned()) {
             Ok(client) => {
                 self.client = Some(client);
                 self.fetch_boards(false);
@@ -984,22 +984,16 @@ impl App {
     }
 
     fn select_board(&mut self, board: Board, config: &mut Config) {
-        let project_changed = self.config.project_key != board.project_key;
         tracing::info!(
             board_id = board.id,
             project = board.project_key.as_deref().unwrap_or(""),
             "selected board"
         );
-        self.config.board_id = Some(board.id);
-        self.config.project_key = board.project_key.clone();
-        config.board_id = Some(board.id);
-        config.project_key = board.project_key.clone();
-        if project_changed {
-            self.config.story_points_field = None;
-            config.story_points_field = None;
-            if let Some(client) = &mut self.client {
-                client.set_story_points_field(None);
-            }
+        config.select_board(board.id, board.project_key.clone());
+        self.config.select_board(board.id, board.project_key.clone());
+        let sp = self.config.story_points_field_cloned();
+        if let Some(client) = &mut self.client {
+            client.set_story_points_field(sp);
         }
         let _ = config.save();
         self.screen = Screen::Main;
@@ -1037,7 +1031,7 @@ impl App {
         self.loading = true;
         self.set_status("loading sprints…", false);
         let tx = self.tx.clone();
-        let project = self.config.project_key.clone();
+        let project = self.config.project_key_cloned();
         tokio::spawn(async move {
             let agile = AgileFacade::new(&client);
             let sprints = match agile.open_sprints(board_id).await {
@@ -1068,7 +1062,7 @@ impl App {
     }
 
     fn fetch_story_points_field(&mut self, board_id: i64) {
-        if self.config.story_points_field.is_some() {
+        if self.config.story_points_field().is_some() {
             return;
         }
         let Some(client) = self.client.clone() else {
@@ -1116,7 +1110,7 @@ impl App {
         let project = if choose {
             None
         } else {
-            self.config.project_key.clone()
+            self.config.project_key_cloned()
         };
         let tx = self.tx.clone();
         tokio::spawn(async move {
@@ -1163,7 +1157,7 @@ impl App {
         let Some(client) = self.client.clone() else {
             return;
         };
-        let Some(project) = self.config.project_key.clone() else {
+        let Some(project) = self.config.project_key_cloned() else {
             self.set_status("no project key configured", true);
             return;
         };
@@ -1256,10 +1250,10 @@ impl App {
             .issue_type(tab.view.filter_types.clone())
             .assignee(assignee)
             .order_by(tab.view.sort_field, tab.view.sort_dir)
-            .story_points_field(self.config.story_points_field.clone())
+            .story_points_field(self.config.story_points_field_cloned())
             .text(self.search_query.clone())
             .max_results(self.page_size());
-        if let Some(project) = &self.config.project_key {
+        if let Some(project) = self.config.project_key() {
             builder = builder.project(project);
         }
         builder = match tab.kind {
@@ -1375,7 +1369,7 @@ impl App {
         let Some(client) = self.client.clone() else {
             return;
         };
-        let Some(project) = self.config.project_key.clone() else {
+        let Some(project) = self.config.project_key_cloned() else {
             self.set_status("no project key configured", true);
             return;
         };
@@ -1401,7 +1395,7 @@ impl App {
         let Some(client) = self.client.clone() else {
             return;
         };
-        let Some(project) = self.config.project_key.clone() else {
+        let Some(project) = self.config.project_key_cloned() else {
             self.set_status("no project key configured", true);
             return;
         };
@@ -1483,7 +1477,7 @@ impl App {
         let Some(client) = self.client.clone() else {
             return;
         };
-        let Some(project) = self.config.project_key.clone() else {
+        let Some(project) = self.config.project_key_cloned() else {
             self.set_status("no project key configured", true);
             return;
         };
@@ -1507,7 +1501,7 @@ impl App {
         let Some(client) = self.client.clone() else {
             return;
         };
-        let Some(project) = self.config.project_key.clone() else {
+        let Some(project) = self.config.project_key_cloned() else {
             return;
         };
         let tx = self.tx.clone();
@@ -1821,8 +1815,8 @@ impl App {
             }
             AppMsg::Done { message, refresh } => {
                 if let Some(field) = message.strip_prefix("__sp_field__:") {
-                    self.config.story_points_field = Some(field.to_string());
-                    config.story_points_field = Some(field.to_string());
+                    self.config.set_story_points_field(Some(field.to_string()));
+                    config.set_story_points_field(Some(field.to_string()));
                     let _ = config.save();
                     if let Some(client) = &mut self.client {
                         client.set_story_points_field(Some(field.to_string()));

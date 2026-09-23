@@ -19,7 +19,7 @@ The TUI authenticates through a hosted token service that holds the Atlassian cl
 
 If several sites are available, pick one; then pick a board. Tokens and preferences are stored under the XDG config directory:
 
-- `~/.config/jira-tui/config.toml` — cloud id, board, columns
+- `~/.config/jira-tui/config.toml` — cloud id, boards, columns
 - `~/.config/jira-tui/credentials.toml` — tokens (mode `0600`), used if the OS keyring is unavailable
 - `~/.local/state/jira-tui/jira-tui.log` — application logs
 
@@ -52,7 +52,7 @@ Until Atlassian finishes reviewing the shared app, you may see an unapproved-app
 | `Esc` | Close overlay |
 | `q` | Quit (stays logged in) |
 
-`:logout` revokes the access/refresh tokens and returns to the login screen. Board preferences are kept.
+`:logout` revokes the access/refresh tokens and returns to the login screen. Board preferences (including previously loaded boards) are kept.
 
 ## Config
 
@@ -61,11 +61,22 @@ Until Atlassian finishes reviewing the shared app, you may see an unapproved-app
 ```toml
 client_id = "..."          # filled in after login (shared app id)
 cloud_id = "..."
+board_id = 123             # currently selected board
+
+[[boards]]
 board_id = 123
 project_key = "ABC"
 story_points_field = "customfield_10016"
 columns = ["key", "summary", "issuetype", "priority", "status", "assignee", "story_points"]
+
+[[boards]]
+board_id = 456
+project_key = "XYZ"
+story_points_field = "customfield_10026"
+columns = ["key", "summary", "status", "assignee"]
 ```
+
+Each board you open is remembered with its own project key, story points field, and column layout. Switching with `p` / `:project` restores that board’s preferences.
 
 Filter and sort are per sprint/backlog tab and last only for the current session (not written to config). An empty assignee filter matches every assignee.
 
