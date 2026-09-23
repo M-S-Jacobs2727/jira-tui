@@ -18,9 +18,12 @@ use crate::jira::agile::AgileFacade;
 use crate::jira::client::JiraClient;
 use crate::jira::issues::{IssueDraft, IssueFacade};
 use crate::jira::models::{
-    Board, CreateMeta, Issue, IssueType, Priority, Sprint, Transition, User,
+    Board, CreateMeta, Issue, IssueType, ParentRef, Priority, Sprint, Transition, User,
 };
-use crate::jira::search::{AssigneeFilter, SearchBuilder, SearchFacade, SortField, SprintRef};
+use crate::jira::search::{
+    AssigneeFilter, ParentSearchKind, SearchBuilder, SearchFacade, SortField, SprintRef,
+    children_clause,
+};
 use crate::ui;
 
 #[derive(Debug, Clone, Default)]
@@ -71,6 +74,9 @@ pub enum Overlay {
     },
     IssueDetail {
         issue: Option<Issue>,
+        children: Vec<Issue>,
+        child_selected: usize,
+        focus: DetailFocus,
         scroll: u16,
     },
     Create(IssueForm),
@@ -79,6 +85,13 @@ pub enum Overlay {
         key: String,
     },
     Assign(AssignForm),
+    ParentPicker {
+        query: String,
+        results: Vec<ParentRef>,
+        selected: usize,
+        form: IssueForm,
+        is_edit: bool,
+    },
     Transition {
         items: Vec<Transition>,
         selected: usize,
@@ -87,6 +100,21 @@ pub enum Overlay {
         items: Vec<SprintChoice>,
         selected: usize,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetailFocus {
+    Description,
+    Children,
+}
+
+/// Restricts create-meta issue types when opening "create child".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildTypeFilter {
+    /// Stories / tasks / bugs under an epic (non-epic, non-subtask).
+    UnderEpic,
+    /// Sub-tasks under a non-epic issue.
+    Subtask,
 }
 
 #[derive(Debug, Clone)]
@@ -133,6 +161,12 @@ pub struct IssueForm {
     pub assignee_idx: usize,
     pub assignees: Vec<AssigneeChoice>,
     pub story_points: String,
+    pub parent: Option<ParentRef>,
+    /// When true, parent cannot be changed (create-child flow).
+    pub parent_locked: bool,
+    /// After successful create, reopen this issue's detail view.
+    pub return_to: Option<String>,
+    pub child_type_filter: Option<ChildTypeFilter>,
     pub focus: usize,
 }
 
@@ -195,9 +229,11 @@ enum AppMsg {
         append: bool,
     },
     Issue(Issue),
+    IssueChildren(Vec<Issue>),
     CreateMeta(CreateMeta),
     Users(Vec<User>),
     FormUsers(Vec<User>),
+    ParentCandidates(Vec<ParentRef>),
     FilterOptions {
         statuses: Vec<String>,
         types: Vec<String>,
@@ -209,6 +245,7 @@ enum AppMsg {
     Done {
         message: String,
         refresh: bool,
+        reopen_issue: Option<String>,
     },
     LoggedOut,
     Error(String),
@@ -450,8 +487,16 @@ impl App {
             self.handle_assign_key(key, &form);
             return;
         }
+        if matches!(self.overlay, Overlay::ParentPicker { .. }) {
+            self.handle_parent_picker_key(key);
+            return;
+        }
         if matches!(self.overlay, Overlay::Create(_) | Overlay::Edit(_)) {
             self.handle_issue_form_key(key);
+            return;
+        }
+        if matches!(self.overlay, Overlay::IssueDetail { .. }) {
+            self.handle_issue_detail_key(key);
             return;
         }
 
@@ -482,28 +527,6 @@ impl App {
                     input.pop();
                 }
                 KeyCode::Char(c) => input.push(c),
-                _ => {}
-            },
-            Overlay::IssueDetail { scroll, .. } => match key.code {
-                KeyCode::Esc | KeyCode::Char('q') => self.overlay = Overlay::None,
-                KeyCode::Char('?') => self.show_help = true,
-                KeyCode::Char('j') | KeyCode::Down => *scroll = scroll.saturating_add(1),
-                KeyCode::Char('k') | KeyCode::Up => *scroll = scroll.saturating_sub(1),
-                KeyCode::Char('e') => {
-                    if let Some(issue) = self.selected_issue().cloned() {
-                        self.open_edit(issue);
-                    }
-                }
-                KeyCode::Char('a') => self.open_assign(),
-                KeyCode::Char('t') => self.open_transitions(),
-                KeyCode::Char('m') => self.open_move_sprint(),
-                KeyCode::Char('d') => {
-                    if let Some(issue) = self.selected_issue() {
-                        self.overlay = Overlay::DeleteConfirm {
-                            key: issue.key.clone(),
-                        };
-                    }
-                }
                 _ => {}
             },
             Overlay::DeleteConfirm { key: issue_key } => {
@@ -538,12 +561,114 @@ impl App {
                     self.overlay = Overlay::None;
                 }
             }
-            Overlay::None
+            Overlay::IssueDetail { .. }
+            | Overlay::None
             | Overlay::Sort { .. }
             | Overlay::Filter(_)
             | Overlay::Assign(_)
+            | Overlay::ParentPicker { .. }
             | Overlay::Create(_)
             | Overlay::Edit(_) => {}
+        }
+    }
+
+    fn handle_issue_detail_key(&mut self, key: KeyEvent) {
+        let (detail_issue, child_key, parent_key, children_len, current_focus) =
+            match &self.overlay {
+                Overlay::IssueDetail {
+                    issue,
+                    children,
+                    child_selected,
+                    focus,
+                    ..
+                } => (
+                    issue.clone(),
+                    children.get(*child_selected).map(|c| c.key.clone()),
+                    issue
+                        .as_ref()
+                        .and_then(|i| i.parent.as_ref().map(|p| p.key.clone())),
+                    children.len(),
+                    *focus,
+                ),
+                _ => return,
+            };
+
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.overlay = Overlay::None,
+            KeyCode::Char('?') => self.show_help = true,
+            KeyCode::Tab => {
+                if let Overlay::IssueDetail { focus, .. } = &mut self.overlay {
+                    *focus = match *focus {
+                        DetailFocus::Description => DetailFocus::Children,
+                        DetailFocus::Children => DetailFocus::Description,
+                    };
+                }
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                if let Overlay::IssueDetail {
+                    focus,
+                    scroll,
+                    child_selected,
+                    ..
+                } = &mut self.overlay
+                {
+                    match *focus {
+                        DetailFocus::Description => *scroll = scroll.saturating_add(1),
+                        DetailFocus::Children => move_sel(child_selected, children_len, key),
+                    }
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if let Overlay::IssueDetail {
+                    focus,
+                    scroll,
+                    child_selected,
+                    ..
+                } = &mut self.overlay
+                {
+                    match *focus {
+                        DetailFocus::Description => *scroll = scroll.saturating_sub(1),
+                        DetailFocus::Children => move_sel(child_selected, children_len, key),
+                    }
+                }
+            }
+            KeyCode::Char('p') => {
+                if let Some(key) = parent_key {
+                    self.open_issue_detail(key);
+                } else {
+                    self.set_status("no parent", true);
+                }
+            }
+            KeyCode::Enter if current_focus == DetailFocus::Children => {
+                if let Some(key) = child_key {
+                    self.open_issue_detail(key);
+                }
+            }
+            KeyCode::Char('c') => {
+                if let Some(issue) = &detail_issue {
+                    self.open_create_child(issue);
+                }
+            }
+            KeyCode::Char('e') => {
+                if let Some(issue) = detail_issue.clone() {
+                    self.open_edit(issue);
+                } else if let Some(issue) = self.selected_issue().cloned() {
+                    self.open_edit(issue);
+                }
+            }
+            KeyCode::Char('a') => self.open_assign(),
+            KeyCode::Char('t') => self.open_transitions(),
+            KeyCode::Char('m') => self.open_move_sprint(),
+            KeyCode::Char('d') => {
+                let key = detail_issue
+                    .as_ref()
+                    .map(|i| i.key.clone())
+                    .or_else(|| self.selected_issue().map(|i| i.key.clone()));
+                if let Some(key) = key {
+                    self.overlay = Overlay::DeleteConfirm { key };
+                }
+            }
+            _ => {}
         }
     }
 
@@ -564,7 +689,6 @@ impl App {
                 self.overlay = Overlay::Sort { selected };
             }
             KeyCode::Char('f') => self.open_filter(),
-            KeyCode::Char('p') => self.open_project_picker(),
             KeyCode::Char('/') => {
                 let mut textarea = styled_textarea("search summary or issue key");
                 if !self.search_query.is_empty() {
@@ -575,11 +699,7 @@ impl App {
             KeyCode::Char('r') => self.refresh_board(),
             KeyCode::Enter => {
                 if let Some(issue) = self.selected_issue().cloned() {
-                    self.overlay = Overlay::IssueDetail {
-                        issue: None,
-                        scroll: 0,
-                    };
-                    self.fetch_issue(issue.key);
+                    self.open_issue_detail(issue.key);
                 }
             }
             KeyCode::Char('n') => self.open_create(),
@@ -761,13 +881,16 @@ impl App {
     }
 
     fn handle_issue_form_key(&mut self, key: KeyEvent) {
-        let layout = FormFocus::new();
         let mut submit = false;
         let mut close = false;
+        let mut open_parent = false;
+        let mut parent_seed = String::new();
+        let mut clear_parent = false;
         {
             let (Overlay::Create(form) | Overlay::Edit(form)) = &mut self.overlay else {
                 return;
             };
+            let layout = FormFocus::for_form(form);
             if form.focus == layout.description {
                 let row = form.description.cursor().0;
                 let last = form.description.lines().len().saturating_sub(1);
@@ -777,7 +900,7 @@ impl App {
                     KeyCode::BackTab => {
                         form.focus = (form.focus + layout.count - 1) % layout.count;
                     }
-                    KeyCode::Up if row == 0 => form.focus = layout.points,
+                    KeyCode::Up if row == 0 => form.focus = layout.field_above_description(),
                     KeyCode::Down if row >= last => form.focus = layout.submit,
                     _ => {
                         form.description.input(key);
@@ -794,6 +917,17 @@ impl App {
                     KeyCode::Up if form.focus > 0 => form.focus -= 1,
                     KeyCode::Enter if form.focus == layout.submit => submit = true,
                     KeyCode::Enter if form.focus == layout.cancel => close = true,
+                    KeyCode::Enter if layout.parent == Some(form.focus) && !form.parent_locked => {
+                        open_parent = true;
+                    }
+                    KeyCode::Char('u')
+                        if key.modifiers.contains(KeyModifiers::CONTROL)
+                            && layout.parent == Some(form.focus)
+                            && !form.parent_locked
+                            && !form.parent_required() =>
+                    {
+                        clear_parent = true;
+                    }
                     KeyCode::Left | KeyCode::Right => {
                         let delta = if key.code == KeyCode::Left { -1 } else { 1 };
                         nudge_picker(form, &layout, delta);
@@ -805,15 +939,21 @@ impl App {
                     KeyCode::Backspace => {
                         if form.focus == layout.summary {
                             form.summary.pop();
-                        } else if form.focus == layout.points {
+                        } else if layout.points == Some(form.focus) {
                             form.story_points.pop();
                         }
                     }
                     KeyCode::Char(c) => {
                         if form.focus == layout.summary {
                             form.summary.push(c);
-                        } else if form.focus == layout.points && c.is_ascii_digit() {
+                        } else if layout.points == Some(form.focus) && c.is_ascii_digit() {
                             form.story_points.push(c);
+                        } else if layout.parent == Some(form.focus)
+                            && !form.parent_locked
+                            && !c.is_control()
+                        {
+                            open_parent = true;
+                            parent_seed.push(c);
                         }
                     }
                     _ => {}
@@ -822,9 +962,158 @@ impl App {
         }
         if close {
             self.overlay = Overlay::None;
+        } else if clear_parent {
+            if let Overlay::Create(form) | Overlay::Edit(form) = &mut self.overlay {
+                form.parent = None;
+            }
+        } else if open_parent {
+            self.open_parent_picker(parent_seed);
         } else if submit {
             self.submit_issue_form();
         }
+    }
+
+    fn open_parent_picker(&mut self, seed: String) {
+        let (form, is_edit) = match &self.overlay {
+            Overlay::Create(form) => (form.clone_for_picker(), false),
+            Overlay::Edit(form) => (form.clone_for_picker(), true),
+            _ => return,
+        };
+        if form.parent_search_kind().is_none() {
+            return;
+        }
+        self.overlay = Overlay::ParentPicker {
+            query: seed.clone(),
+            results: Vec::new(),
+            selected: 0,
+            form,
+            is_edit,
+        };
+        self.search_parents(seed);
+    }
+
+    fn search_parents(&mut self, query: String) {
+        let Some(kind) = (match &self.overlay {
+            Overlay::ParentPicker { form, .. } => form.parent_search_kind(),
+            _ => None,
+        }) else {
+            return;
+        };
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        let Some(project) = self.config.project_key_cloned() else {
+            return;
+        };
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let mut builder = SearchBuilder::new()
+                .project(project)
+                .clause(kind.jql_clause())
+                .max_results(20)
+                .order_by(SortField::Key, crate::jira::search::SortDir::Asc);
+            if !query.is_empty() {
+                builder = builder.text(query);
+            }
+            match SearchFacade::new(&client).search(builder.build()).await {
+                Ok(page) => {
+                    let results = page
+                        .issues
+                        .into_iter()
+                        .map(|issue| ParentRef {
+                            key: issue.key,
+                            summary: issue.summary,
+                        })
+                        .collect();
+                    let _ = tx.send(AppMsg::ParentCandidates(results));
+                }
+                Err(err) => {
+                    let _ = tx.send(AppMsg::Error(err.to_string()));
+                }
+            }
+        });
+    }
+
+    fn handle_parent_picker_key(&mut self, key: KeyEvent) {
+        let Overlay::ParentPicker {
+            query,
+            results,
+            selected,
+            form,
+            is_edit,
+        } = &self.overlay
+        else {
+            return;
+        };
+        let mut query = query.clone();
+        let results = results.clone();
+        let mut selected = *selected;
+        let mut form = form.clone_for_picker();
+        let is_edit = *is_edit;
+        match key.code {
+            KeyCode::Esc => {
+                if is_edit {
+                    self.overlay = Overlay::Edit(form);
+                } else {
+                    self.overlay = Overlay::Create(form);
+                }
+                return;
+            }
+            KeyCode::Enter => {
+                if let Some(parent) = results.get(selected).cloned() {
+                    form.parent = Some(parent);
+                }
+                if is_edit {
+                    self.overlay = Overlay::Edit(form);
+                } else {
+                    self.overlay = Overlay::Create(form);
+                }
+                return;
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if !form.parent_required() {
+                    form.parent = None;
+                }
+                if is_edit {
+                    self.overlay = Overlay::Edit(form);
+                } else {
+                    self.overlay = Overlay::Create(form);
+                }
+                return;
+            }
+            KeyCode::Backspace => {
+                query.pop();
+                self.overlay = Overlay::ParentPicker {
+                    query: query.clone(),
+                    results,
+                    selected: 0,
+                    form,
+                    is_edit,
+                };
+                self.search_parents(query);
+                return;
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                query.push(c);
+                self.overlay = Overlay::ParentPicker {
+                    query: query.clone(),
+                    results,
+                    selected: 0,
+                    form,
+                    is_edit,
+                };
+                self.search_parents(query);
+                return;
+            }
+            _ => move_sel(&mut selected, results.len(), key),
+        }
+        self.overlay = Overlay::ParentPicker {
+            query,
+            results,
+            selected,
+            form,
+            is_edit,
+        };
     }
 
     fn handle_assign_key(&mut self, key: KeyEvent, form: &AssignForm) {
@@ -1096,6 +1385,7 @@ impl App {
                 let _ = tx.send(AppMsg::Done {
                     message: format!("__sp_field__:{field}"),
                     refresh: true,
+                    reopen_issue: None,
                 });
             }
         });
@@ -1326,16 +1616,47 @@ impl App {
         });
     }
 
+    fn open_issue_detail(&mut self, key: String) {
+        self.overlay = Overlay::IssueDetail {
+            issue: None,
+            children: Vec::new(),
+            child_selected: 0,
+            focus: DetailFocus::Description,
+            scroll: 0,
+        };
+        self.fetch_issue(key);
+    }
+
     fn fetch_issue(&mut self, key: String) {
         let Some(client) = self.client.clone() else {
             return;
         };
+        let Some(project) = self.config.project_key_cloned() else {
+            self.set_status("no project key configured", true);
+            return;
+        };
         self.loading = true;
+        self.set_status(format!("loading {key}…"), false);
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            match IssueFacade::new(&client).get(&key).await {
+            let facade = IssueFacade::new(&client);
+            match facade.get(&key).await {
                 Ok(issue) => {
                     let _ = tx.send(AppMsg::Issue(issue));
+                    let request = SearchBuilder::new()
+                        .project(project)
+                        .clause(children_clause(&key))
+                        .max_results(50)
+                        .order_by(SortField::Default, crate::jira::search::SortDir::Asc)
+                        .build();
+                    match SearchFacade::new(&client).search(request).await {
+                        Ok(page) => {
+                            let _ = tx.send(AppMsg::IssueChildren(page.issues));
+                        }
+                        Err(err) => {
+                            let _ = tx.send(AppMsg::Error(err.to_string()));
+                        }
+                    }
                 }
                 Err(err) => {
                     let _ = tx.send(AppMsg::Error(err.to_string()));
@@ -1348,7 +1669,7 @@ impl App {
         let mut form = IssueForm::blank();
         form.sprints = sprint_choices(&self.tabs);
         form.sprint_idx = 0;
-        form.focus = FormFocus::new().summary;
+        form.focus = FormFocus::for_form(&form).summary;
         self.overlay = Overlay::Create(form);
         self.fetch_create_meta();
         self.fetch_form_users();
@@ -1359,8 +1680,44 @@ impl App {
         let mut form = IssueForm::from_issue(&issue);
         form.sprints = sprint_choices(&self.tabs);
         form.sprint_idx = select_sprint_idx(&mut form.sprints, &issue, tab_kind.as_ref());
-        form.focus = FormFocus::new().summary;
+        form.focus = FormFocus::for_form(&form).summary;
         self.overlay = Overlay::Edit(form);
+        self.fetch_create_meta();
+        self.fetch_form_users();
+    }
+
+    fn open_create_child(&mut self, parent: &Issue) {
+        if parent.is_subtask {
+            self.set_status("sub-tasks cannot have children", true);
+            return;
+        }
+        let is_epic = parent.issue_type.eq_ignore_ascii_case("Epic");
+        let mut form = IssueForm::blank();
+        form.sprints = sprint_choices(&self.tabs);
+        form.sprint_idx = 0;
+        form.parent = Some(ParentRef {
+            key: parent.key.clone(),
+            summary: parent.summary.clone(),
+        });
+        form.parent_locked = true;
+        form.return_to = Some(parent.key.clone());
+        if is_epic {
+            form.child_type_filter = Some(ChildTypeFilter::UnderEpic);
+            form.types = vec![IssueType {
+                id: String::new(),
+                name: "Story".into(),
+                subtask: false,
+            }];
+        } else {
+            form.child_type_filter = Some(ChildTypeFilter::Subtask);
+            form.types = vec![IssueType {
+                id: String::new(),
+                name: "Sub-task".into(),
+                subtask: true,
+            }];
+        }
+        form.focus = FormFocus::for_form(&form).summary;
+        self.overlay = Overlay::Create(form);
         self.fetch_create_meta();
         self.fetch_form_users();
     }
@@ -1387,11 +1744,33 @@ impl App {
     }
 
     fn submit_issue_form(&mut self) {
-        let (is_create, draft, key) = match &self.overlay {
-            Overlay::Create(form) => (true, form.to_draft(), None),
-            Overlay::Edit(form) => (false, form.to_draft(), form.key.clone()),
+        let (is_create, draft, key, return_to, parent_ok) = match &self.overlay {
+            Overlay::Create(form) => {
+                let parent_ok = !form.parent_required() || form.parent.is_some();
+                (
+                    true,
+                    form.to_draft(),
+                    None,
+                    form.return_to.clone(),
+                    parent_ok,
+                )
+            }
+            Overlay::Edit(form) => {
+                let parent_ok = !form.parent_required() || form.parent.is_some();
+                (
+                    false,
+                    form.to_draft(),
+                    form.key.clone(),
+                    form.return_to.clone(),
+                    parent_ok,
+                )
+            }
             _ => return,
         };
+        if !parent_ok {
+            self.set_status("parent is required for sub-tasks", true);
+            return;
+        }
         let Some(client) = self.client.clone() else {
             return;
         };
@@ -1429,6 +1808,7 @@ impl App {
                     let _ = tx.send(AppMsg::Done {
                         message,
                         refresh: true,
+                        reopen_issue: return_to,
                     });
                 }
                 Err(err) => {
@@ -1452,6 +1832,7 @@ impl App {
                     let _ = tx.send(AppMsg::Done {
                         message: format!("deleted {key}"),
                         refresh: true,
+                        reopen_issue: None,
                     });
                 }
                 Err(err) => {
@@ -1537,6 +1918,7 @@ impl App {
                     let _ = tx.send(AppMsg::Done {
                         message: format!("updated assignee on {key}"),
                         refresh: true,
+                        reopen_issue: None,
                     });
                 }
                 Err(err) => {
@@ -1582,6 +1964,7 @@ impl App {
                     let _ = tx.send(AppMsg::Done {
                         message: format!("transitioned {key}"),
                         refresh: true,
+                        reopen_issue: None,
                     });
                 }
                 Err(err) => {
@@ -1615,6 +1998,7 @@ impl App {
                     let _ = tx.send(AppMsg::Done {
                         message: format!("moved {key} to {name}"),
                         refresh: true,
+                        reopen_issue: None,
                     });
                 }
                 Err(err) => {
@@ -1757,11 +2141,27 @@ impl App {
                 if let Overlay::IssueDetail { issue: slot, .. } = &mut self.overlay {
                     *slot = Some(issue);
                 }
+                self.loading = false;
                 self.set_status(String::new(), false);
+            }
+            AppMsg::IssueChildren(children) => {
+                if let Overlay::IssueDetail {
+                    children: slot,
+                    child_selected,
+                    ..
+                } = &mut self.overlay
+                {
+                    *slot = children;
+                    *child_selected = 0;
+                }
             }
             AppMsg::CreateMeta(meta) => match &mut self.overlay {
                 Overlay::Create(form) => {
-                    apply_create_meta(form, meta, Some(("Story", "Medium")));
+                    let defaults = match form.child_type_filter {
+                        Some(ChildTypeFilter::Subtask) => Some(("Sub-task", "Medium")),
+                        _ => Some(("Story", "Medium")),
+                    };
+                    apply_create_meta(form, meta, defaults);
                 }
                 Overlay::Edit(form) => {
                     apply_create_meta(form, meta, None);
@@ -1773,6 +2173,17 @@ impl App {
                 if let Overlay::Assign(form) = &mut self.overlay {
                     form.users = users;
                     form.selected = 0;
+                }
+            }
+            AppMsg::ParentCandidates(results) => {
+                if let Overlay::ParentPicker {
+                    results: slot,
+                    selected,
+                    ..
+                } = &mut self.overlay
+                {
+                    *slot = results;
+                    *selected = 0;
                 }
             }
             AppMsg::FormUsers(users) => {
@@ -1813,7 +2224,11 @@ impl App {
                 self.overlay = Overlay::Transition { items, selected: 0 };
                 self.set_status(String::new(), false);
             }
-            AppMsg::Done { message, refresh } => {
+            AppMsg::Done {
+                message,
+                refresh,
+                reopen_issue,
+            } => {
                 if let Some(field) = message.strip_prefix("__sp_field__:") {
                     self.config.set_story_points_field(Some(field.to_string()));
                     config.set_story_points_field(Some(field.to_string()));
@@ -1826,10 +2241,14 @@ impl App {
                     }
                     return;
                 }
-                self.overlay = Overlay::None;
                 self.set_status(message, false);
                 if refresh {
                     self.reload_current_tab();
+                }
+                if let Some(key) = reopen_issue {
+                    self.open_issue_detail(key);
+                } else {
+                    self.overlay = Overlay::None;
                 }
             }
             AppMsg::LoggedOut => {
@@ -2049,6 +2468,10 @@ impl IssueForm {
             assignee_idx: 0,
             assignees: vec![unassigned_choice()],
             story_points: String::new(),
+            parent: None,
+            parent_locked: false,
+            return_to: None,
+            child_type_filter: None,
             focus: 0,
         }
     }
@@ -2105,11 +2528,63 @@ impl IssueForm {
                 id: None,
                 name: "Backlog".into(),
             }],
+            parent: issue.parent.clone(),
+            parent_locked: false,
+            return_to: None,
+            child_type_filter: None,
             focus: 2,
         }
     }
 
+    pub fn selected_type(&self) -> Option<&IssueType> {
+        self.types.get(self.type_idx)
+    }
+
+    pub fn is_epic_type(&self) -> bool {
+        self.selected_type()
+            .map(|t| t.name.eq_ignore_ascii_case("Epic"))
+            .unwrap_or(false)
+    }
+
+    pub fn shows_parent(&self) -> bool {
+        !self.is_epic_type()
+    }
+
+    pub fn parent_required(&self) -> bool {
+        self.selected_type().map(|t| t.subtask).unwrap_or(false)
+    }
+
+    /// Sprint and story points apply to standard issues only (not epics or sub-tasks).
+    pub fn shows_sprint_and_points(&self) -> bool {
+        !self.is_epic_type() && !self.parent_required()
+    }
+
+    fn parent_search_kind(&self) -> Option<ParentSearchKind> {
+        if self.is_epic_type() {
+            return None;
+        }
+        if self.parent_required() {
+            Some(ParentSearchKind::NonEpicNonSubtask)
+        } else {
+            Some(ParentSearchKind::Epic)
+        }
+    }
+
+    fn sync_parent_for_type(&mut self) {
+        if self.parent_locked {
+            return;
+        }
+        if self.is_epic_type() {
+            self.parent = None;
+        }
+        if !self.shows_sprint_and_points() {
+            self.sprint_idx = 0;
+            self.story_points.clear();
+        }
+    }
+
     fn to_draft(&self) -> IssueDraft {
+        let include_sprint_points = self.shows_sprint_and_points();
         IssueDraft {
             issue_type: self
                 .types
@@ -2126,8 +2601,45 @@ impl IssueForm {
                 .assignees
                 .get(self.assignee_idx)
                 .and_then(|choice| choice.account_id.clone()),
-            story_points: self.story_points.parse().ok(),
-            sprint_id: self.sprints.get(self.sprint_idx).and_then(|s| s.id),
+            story_points: if include_sprint_points {
+                self.story_points.parse().ok()
+            } else {
+                None
+            },
+            sprint_id: if include_sprint_points {
+                self.sprints.get(self.sprint_idx).and_then(|s| s.id)
+            } else {
+                None
+            },
+            include_sprint: include_sprint_points,
+            parent_key: self.parent.as_ref().map(|p| p.key.clone()),
+        }
+    }
+
+    fn clone_for_picker(&self) -> Self {
+        let mut description = styled_textarea("issue description");
+        let text = self.description.lines().join("\n");
+        if !text.is_empty() {
+            description.insert_str(&text);
+        }
+        Self {
+            key: self.key.clone(),
+            type_idx: self.type_idx,
+            types: self.types.clone(),
+            summary: self.summary.clone(),
+            description,
+            priority_idx: self.priority_idx,
+            priorities: self.priorities.clone(),
+            sprint_idx: self.sprint_idx,
+            sprints: self.sprints.clone(),
+            assignee_idx: self.assignee_idx,
+            assignees: self.assignees.clone(),
+            story_points: self.story_points.clone(),
+            parent: self.parent.clone(),
+            parent_locked: self.parent_locked,
+            return_to: self.return_to.clone(),
+            child_type_filter: self.child_type_filter,
+            focus: self.focus,
         }
     }
 }
@@ -2163,14 +2675,25 @@ fn apply_create_meta(form: &mut IssueForm, meta: CreateMeta, defaults: Option<(&
         let preferred = defaults
             .map(|(ty, _)| ty.to_string())
             .or_else(|| form.types.get(form.type_idx).map(|t| t.name.clone()));
-        form.types = meta.issue_types;
-        form.type_idx = preferred
-            .and_then(|name| {
-                form.types
-                    .iter()
-                    .position(|t| t.name.eq_ignore_ascii_case(&name))
-            })
-            .unwrap_or(0);
+        let mut types = meta.issue_types;
+        if let Some(filter) = form.child_type_filter {
+            types.retain(|t| match filter {
+                ChildTypeFilter::UnderEpic => {
+                    !t.subtask && !t.name.eq_ignore_ascii_case("Epic")
+                }
+                ChildTypeFilter::Subtask => t.subtask,
+            });
+        }
+        if !types.is_empty() {
+            form.types = types;
+            form.type_idx = preferred
+                .and_then(|name| {
+                    form.types
+                        .iter()
+                        .position(|t| t.name.eq_ignore_ascii_case(&name))
+                })
+                .unwrap_or(0);
+        }
     }
     if !meta.priorities.is_empty() {
         let preferred = defaults.map(|(_, pri)| pri.to_string()).or_else(|| {
@@ -2187,6 +2710,7 @@ fn apply_create_meta(form: &mut IssueForm, meta: CreateMeta, defaults: Option<(&
             })
             .unwrap_or(0);
     }
+    form.sync_parent_for_type();
 }
 
 fn select_sprint_idx(
@@ -2236,8 +2760,9 @@ struct FormFocus {
     priority: usize,
     sprint: Option<usize>,
     assignee: usize,
+    parent: Option<usize>,
     summary: usize,
-    points: usize,
+    points: Option<usize>,
     description: usize,
     submit: usize,
     cancel: usize,
@@ -2245,19 +2770,60 @@ struct FormFocus {
 }
 
 impl FormFocus {
-    fn new() -> Self {
+    fn for_form(form: &IssueForm) -> Self {
+        let mut i = 0usize;
+        let type_ = i;
+        i += 1;
+        let priority = i;
+        i += 1;
+        let sprint = if form.shows_sprint_and_points() {
+            let s = i;
+            i += 1;
+            Some(s)
+        } else {
+            None
+        };
+        let assignee = i;
+        i += 1;
+        let parent = if form.shows_parent() {
+            let p = i;
+            i += 1;
+            Some(p)
+        } else {
+            None
+        };
+        let summary = i;
+        i += 1;
+        let points = if form.shows_sprint_and_points() {
+            let p = i;
+            i += 1;
+            Some(p)
+        } else {
+            None
+        };
+        let description = i;
+        i += 1;
+        let submit = i;
+        i += 1;
+        let cancel = i;
+        i += 1;
         Self {
-            type_: 0,
-            priority: 1,
-            sprint: Some(2),
-            assignee: 3,
-            summary: 4,
-            points: 5,
-            description: 6,
-            submit: 7,
-            cancel: 8,
-            count: 9,
+            type_,
+            priority,
+            sprint,
+            assignee,
+            parent,
+            summary,
+            points,
+            description,
+            submit,
+            cancel,
+            count: i,
         }
+    }
+
+    fn field_above_description(&self) -> usize {
+        self.points.unwrap_or(self.summary)
     }
 }
 
@@ -2278,6 +2844,12 @@ fn picker_focused(form: &IssueForm, layout: &FormFocus) -> bool {
 fn nudge_picker(form: &mut IssueForm, layout: &FormFocus, delta: isize) {
     if form.focus == layout.type_ {
         cycle_idx(&mut form.type_idx, form.types.len(), delta);
+        form.sync_parent_for_type();
+        // Clamp focus if parent row disappeared (Epic selected).
+        let next = FormFocus::for_form(form);
+        if form.focus >= next.count {
+            form.focus = next.summary;
+        }
     } else if form.focus == layout.priority {
         cycle_idx(&mut form.priority_idx, form.priorities.len(), -delta);
     } else if layout.sprint == Some(form.focus) {

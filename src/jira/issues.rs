@@ -19,6 +19,10 @@ pub struct IssueDraft {
     pub assignee_account_id: Option<String>,
     pub story_points: Option<f64>,
     pub sprint_id: Option<i64>,
+    /// When false, update leaves the sprint field unchanged (epics / sub-tasks).
+    pub include_sprint: bool,
+    /// Parent issue key. On create, omitted when `None`. On update, `None` clears parent.
+    pub parent_key: Option<String>,
 }
 
 impl<'a> IssueFacade<'a> {
@@ -114,6 +118,11 @@ impl<'a> IssueFacade<'a> {
             };
             fields[field] = json!(sprint_id);
         }
+        if let Some(parent_key) = &draft.parent_key {
+            if !parent_key.is_empty() {
+                fields["parent"] = json!({ "key": parent_key });
+            }
+        }
         let value = self
             .client
             .post_json("api/3/issue", &json!({ "fields": fields }))
@@ -143,12 +152,18 @@ impl<'a> IssueFacade<'a> {
             Some(id) if !id.is_empty() => json!({ "accountId": id }),
             _ => json!({ "accountId": Value::Null }),
         };
-        if let Some(field) = SearchFacade::new(self.client).sprint_field_id().await? {
-            fields[field] = match draft.sprint_id {
-                Some(id) => json!(id),
-                None => Value::Null,
-            };
+        if draft.include_sprint {
+            if let Some(field) = SearchFacade::new(self.client).sprint_field_id().await? {
+                fields[field] = match draft.sprint_id {
+                    Some(id) => json!(id),
+                    None => Value::Null,
+                };
+            }
         }
+        fields["parent"] = match &draft.parent_key {
+            Some(key) if !key.is_empty() => json!({ "key": key }),
+            _ => Value::Null,
+        };
         self.client
             .put_json(
                 &format!("api/3/issue/{issue_id_or_key}"),

@@ -5,7 +5,7 @@ use std::path::Path;
 
 use jira_tui::auth::store::StoredTokens;
 use jira_tui::jira::client::JiraClient;
-use jira_tui::jira::models::{Comment, Issue, SearchPage, User};
+use jira_tui::jira::models::{Comment, Issue, ParentRef, SearchPage, User};
 use serde_json::Value;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
@@ -19,12 +19,14 @@ pub struct IssueSnapshot {
     pub key: String,
     pub summary: String,
     pub issue_type: String,
+    pub is_subtask: bool,
     pub priority: Option<String>,
     pub status: String,
     pub assignee: Option<User>,
     pub story_points: Option<f64>,
     pub description_text: String,
     pub comments: Vec<Comment>,
+    pub parent: Option<ParentRef>,
 }
 
 #[derive(Debug)]
@@ -39,12 +41,14 @@ pub fn issue_snapshot(issue: &Issue) -> IssueSnapshot {
         key: issue.key.clone(),
         summary: issue.summary.clone(),
         issue_type: issue.issue_type.clone(),
+        is_subtask: issue.is_subtask,
         priority: issue.priority.clone(),
         status: issue.status.clone(),
         assignee: issue.assignee.clone(),
         story_points: issue.story_points,
         description_text: issue.description_text.clone(),
         comments: issue.comments.clone(),
+        parent: issue.parent.clone(),
     }
 }
 

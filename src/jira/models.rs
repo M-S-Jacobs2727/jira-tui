@@ -7,14 +7,22 @@ pub struct Issue {
     pub key: String,
     pub summary: String,
     pub issue_type: String,
+    pub is_subtask: bool,
     pub priority: Option<String>,
     pub status: String,
     pub assignee: Option<User>,
     pub story_points: Option<f64>,
     pub description_text: String,
     pub comments: Vec<Comment>,
+    pub parent: Option<ParentRef>,
     #[allow(dead_code)]
     pub raw: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParentRef {
+    pub key: String,
+    pub summary: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,7 +60,6 @@ pub struct IssueType {
     #[allow(dead_code)]
     pub id: String,
     pub name: String,
-    #[allow(dead_code)]
     pub subtask: bool,
 }
 

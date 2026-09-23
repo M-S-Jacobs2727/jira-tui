@@ -12,6 +12,8 @@ fn draft() -> IssueDraft {
         assignee_account_id: Some("acc-1".into()),
         story_points: Some(8.0),
         sprint_id: None,
+        include_sprint: true,
+        parent_key: None,
     }
 }
 
@@ -61,6 +63,40 @@ async fn create_posts_fields_and_returns_key() {
         .unwrap();
     assert_eq!(key, "DEMO-42");
     insta::assert_json_snapshot!(jira.json_bodies_for("POST", "api/3/issue").await);
+}
+
+#[tokio::test]
+async fn create_with_parent_sets_parent_key() {
+    let jira = JiraMock::start().await;
+    jira.mock_json("POST", "api/3/issue", &fixture("issue_create.json"))
+        .await;
+
+    let mut draft = draft();
+    draft.parent_key = Some("DEMO-100".into());
+    let key = IssueFacade::new(&jira.client)
+        .create("DEMO", &draft)
+        .await
+        .unwrap();
+    assert_eq!(key, "DEMO-42");
+    insta::assert_json_snapshot!(jira.json_bodies_for("POST", "api/3/issue").await);
+}
+
+#[tokio::test]
+async fn update_clears_parent_when_none() {
+    let jira = JiraMock::start().await;
+    jira.mock_json("GET", "api/3/field", &fixture("fields.json"))
+        .await;
+    jira.mock_json("PUT", "api/3/issue/DEMO-1", "null").await;
+
+    let mut draft = draft();
+    draft.parent_key = None;
+    IssueFacade::new(&jira.client)
+        .update("DEMO-1", &draft)
+        .await
+        .unwrap();
+    let bodies = jira.json_bodies_for("PUT", "api/3/issue/DEMO-1").await;
+    let parent = bodies[0]["fields"]["parent"].clone();
+    assert!(parent.is_null());
 }
 
 #[tokio::test]

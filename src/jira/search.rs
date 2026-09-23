@@ -711,11 +711,37 @@ pub fn default_fields(story_points_field: Option<&str>) -> Vec<String> {
         "comment".into(),
         "description".into(),
         "sprint".into(),
+        "parent".into(),
     ];
     if let Some(field) = story_points_field {
         fields.push(field.to_string());
     }
     fields
+}
+
+/// What kinds of issues may be selected as a parent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParentSearchKind {
+    /// Stories / tasks / bugs sit under epics.
+    Epic,
+    /// Sub-tasks sit under non-epic, non-subtask issues.
+    NonEpicNonSubtask,
+}
+
+impl ParentSearchKind {
+    pub fn jql_clause(self) -> &'static str {
+        match self {
+            Self::Epic => "issuetype = Epic",
+            Self::NonEpicNonSubtask => {
+                "issuetype != Epic AND issuetype not in subTaskIssueTypes()"
+            }
+        }
+    }
+}
+
+/// JQL clause matching children of `parent_key`.
+pub fn children_clause(parent_key: &str) -> String {
+    format!("parent = {}", quote(parent_key))
 }
 
 pub fn quote(value: &str) -> String {
@@ -799,6 +825,31 @@ mod tests {
             .build();
         assert!(req.jql.contains("issuetype != Epic"));
         assert!(req.jql.contains("issuetype not in subTaskIssueTypes()"));
+    }
+
+    #[test]
+    fn parent_search_kinds_and_children_clause() {
+        assert_eq!(ParentSearchKind::Epic.jql_clause(), "issuetype = Epic");
+        assert_eq!(
+            ParentSearchKind::NonEpicNonSubtask.jql_clause(),
+            "issuetype != Epic AND issuetype not in subTaskIssueTypes()"
+        );
+        assert_eq!(children_clause("ABC-1"), "parent = \"ABC-1\"");
+
+        let epic_parents = SearchBuilder::new()
+            .project("ABC")
+            .clause(ParentSearchKind::Epic.jql_clause())
+            .text("checkout")
+            .build();
+        assert!(epic_parents.jql.contains("issuetype = Epic"));
+        assert!(epic_parents.jql.contains("summary ~ \"checkout\""));
+
+        let kids = SearchBuilder::new()
+            .project("ABC")
+            .clause(children_clause("ABC-9"))
+            .build();
+        assert!(kids.jql.contains("parent = \"ABC-9\""));
+        assert!(default_fields(None).iter().any(|f| f == "parent"));
     }
 
     #[test]

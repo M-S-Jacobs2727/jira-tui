@@ -1,5 +1,6 @@
 ---
 source: tests/jira_issues.rs
+assertion_line: 30
 expression: issue_snapshot(&issue)
 ---
 IssueSnapshot {
@@ -7,6 +8,7 @@ IssueSnapshot {
     key: "DEMO-1",
     summary: "Fix checkout total",
     issue_type: "Bug",
+    is_subtask: false,
     priority: Some(
         "High",
     ),
@@ -28,4 +30,10 @@ IssueSnapshot {
             body: "Looks like a rounding bug.",
         },
     ],
+    parent: Some(
+        ParentRef {
+            key: "DEMO-100",
+            summary: "Checkout epic",
+        },
+    ),
 }

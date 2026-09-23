@@ -39,9 +39,8 @@ Until Atlassian finishes reviewing the shared app, you may see an unapproved-app
 | `f` | Filter (per tab, session only) |
 | `/` | Search current tab (session only) |
 | `r` | Refresh |
-| `p` | Change project / board |
 | `Enter` | View issue |
-| `n` | Create story |
+| `n` | Create issue |
 | `e` | Edit issue |
 | `d` | Delete issue (confirm) |
 | `a` | Assign (`Ctrl+u` unassigns) |
@@ -51,6 +50,18 @@ Until Atlassian finishes reviewing the shared app, you may see an unapproved-app
 | `?` | Help |
 | `Esc` | Close overlay |
 | `q` | Quit (stays logged in) |
+
+### Issue detail
+
+| Key | Action |
+| --- | --- |
+| `Tab` | Toggle description / children focus |
+| `p` | Open parent |
+| `Enter` | Open selected child (when children focused) |
+| `c` | Create child (story/task/bug under epics; sub-task otherwise) |
+| `e` | Edit (includes changing parent) |
+
+On create/edit, the parent field searches epics for stories/tasks/bugs, is required for sub-tasks, and is hidden when creating an epic.
 
 `:logout` revokes the access/refresh tokens and returns to the login screen. Board preferences (including previously loaded boards) are kept.
 
@@ -76,7 +87,7 @@ story_points_field = "customfield_10026"
 columns = ["key", "summary", "status", "assignee"]
 ```
 
-Each board you open is remembered with its own project key, story points field, and column layout. Switching with `p` / `:project` restores that board’s preferences.
+Each board you open is remembered with its own project key, story points field, and column layout. Switching with `:project` restores that board’s preferences.
 
 Filter and sort are per sprint/backlog tab and last only for the current session (not written to config). An empty assignee filter matches every assignee.
 

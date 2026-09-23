@@ -1,7 +1,7 @@
 ---
 source: tests/jira_issues.rs
-assertion_line: 130
-expression: "jira.json_bodies_for(\"PUT\", \"api/3/issue/DEMO-1\").await"
+assertion_line: 80
+expression: "jira.json_bodies_for(\"POST\", \"api/3/issue\").await"
 ---
 [
   {
@@ -10,7 +10,6 @@ expression: "jira.json_bodies_for(\"PUT\", \"api/3/issue/DEMO-1\").await"
         "accountId": "acc-1"
       },
       "customfield_10016": 8.0,
-      "customfield_10020": null,
       "description": {
         "content": [
           {
@@ -35,9 +34,17 @@ expression: "jira.json_bodies_for(\"PUT\", \"api/3/issue/DEMO-1\").await"
         "type": "doc",
         "version": 1
       },
-      "parent": null,
+      "issuetype": {
+        "name": "Story"
+      },
+      "parent": {
+        "key": "DEMO-100"
+      },
       "priority": {
         "name": "High"
+      },
+      "project": {
+        "key": "DEMO"
       },
       "summary": "New checkout flow"
     }

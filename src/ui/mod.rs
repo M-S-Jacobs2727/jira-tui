@@ -58,6 +58,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                     board::draw(frame, app, content);
                     forms::draw_assign(frame, app, content);
                 }
+                Overlay::ParentPicker { .. } => {
+                    board::draw(frame, app, content);
+                    forms::draw_parent_picker(frame, app, content);
+                }
                 Overlay::Transition { .. } => {
                     board::draw(frame, app, content);
                     forms::draw_transition(frame, app, content);

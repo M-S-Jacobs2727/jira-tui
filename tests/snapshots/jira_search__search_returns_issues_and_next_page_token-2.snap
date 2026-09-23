@@ -1,5 +1,6 @@
 ---
 source: tests/jira_search.rs
+assertion_line: 28
 expression: "jira.json_bodies_for(\"POST\", \"api/3/search/jql\").await"
 ---
 [
@@ -13,6 +14,7 @@ expression: "jira.json_bodies_for(\"POST\", \"api/3/search/jql\").await"
       "comment",
       "description",
       "sprint",
+      "parent",
       "customfield_10016"
     ],
     "fieldsByKeys": true,

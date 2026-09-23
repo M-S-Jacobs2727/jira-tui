@@ -9,7 +9,7 @@
   },
   "fields": {
     "summary": "Fix checkout total",
-    "issuetype": { "name": "Bug" },
+    "issuetype": { "name": "Bug", "subtask": false },
     "priority": { "name": "High" },
     "status": { "name": "In Progress" },
     "assignee": { "accountId": "acc-1", "displayName": "Ada Lovelace" },
@@ -42,6 +42,10 @@
           }
         }
       ]
+    },
+    "parent": {
+      "key": "DEMO-100",
+      "fields": { "summary": "Checkout epic" }
     }
   }
 }

@@ -199,6 +199,11 @@ impl JiraClient {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
+        let is_subtask = fields
+            .get("issuetype")
+            .and_then(|v| v.get("subtask"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let priority = fields
             .get("priority")
             .and_then(|v| v.get("name"))
@@ -237,17 +242,33 @@ impl JiraClient {
                 .unwrap_or_default()
         });
         let comments = parse_comments(&fields);
+        let parent = fields.get("parent").and_then(|v| {
+            if v.is_null() {
+                return None;
+            }
+            let key = v.get("key")?.as_str()?.to_string();
+            let summary = v
+                .get("fields")
+                .and_then(|f| f.get("summary"))
+                .and_then(Value::as_str)
+                .or_else(|| v.get("summary").and_then(Value::as_str))
+                .unwrap_or_default()
+                .to_string();
+            Some(crate::jira::models::ParentRef { key, summary })
+        });
         Some(Issue {
             id,
             key,
             summary,
             issue_type,
+            is_subtask,
             priority,
             status,
             assignee,
             story_points,
             description_text,
             comments,
+            parent,
             raw: value.clone(),
         })
     }

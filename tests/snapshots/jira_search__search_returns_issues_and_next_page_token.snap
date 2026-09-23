@@ -1,5 +1,6 @@
 ---
 source: tests/jira_search.rs
+assertion_line: 27
 expression: search_page_snapshot(&page)
 ---
 SearchPageSnapshot {
@@ -9,6 +10,7 @@ SearchPageSnapshot {
             key: "DEMO-1",
             summary: "Fix checkout total",
             issue_type: "Bug",
+            is_subtask: false,
             priority: Some(
                 "High",
             ),
@@ -24,12 +26,14 @@ SearchPageSnapshot {
             ),
             description_text: "The total is wrong.",
             comments: [],
+            parent: None,
         },
         IssueSnapshot {
             id: "10002",
             key: "DEMO-2",
             summary: "Add empty cart state",
             issue_type: "Story",
+            is_subtask: false,
             priority: Some(
                 "Medium",
             ),
@@ -40,6 +44,7 @@ SearchPageSnapshot {
             ),
             description_text: "",
             comments: [],
+            parent: None,
         },
     ],
     next_page_token: Some(
