@@ -7,7 +7,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use crate::app::{App, Overlay, Screen};
 use crate::jira::search::SortField;
 use crate::ui::keys::{HELP_LINES, help_lines};
-use crate::ui::{clear_popup, cursor_style, focus_style, popup};
+use crate::ui::{clear_popup, cursor_style, draw_button, focus_style, popup};
 
 pub fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
     let Screen::Login(state) = &app.screen else {
@@ -152,7 +152,7 @@ pub fn draw_sort(frame: &mut Frame, app: &App, area: Rect) {
     let Overlay::Sort { selected } = &app.overlay else {
         return;
     };
-    let box_area = popup(area, 40, 14);
+    let box_area = popup(area, 40, 15);
     clear_popup(frame, box_area);
     let items: Vec<ListItem> = SortField::ALL
         .iter()
@@ -162,11 +162,25 @@ pub fn draw_sort(frame: &mut Frame, app: &App, area: Rect) {
             ListItem::new(format!("{prefix}{}", field.label()))
         })
         .collect();
+    let sort_field = app
+        .current_view()
+        .map(|v| v.sort_field)
+        .unwrap_or(SortField::Default);
+    let sort_dir = app
+        .current_view()
+        .map(|v| v.sort_dir)
+        .unwrap_or_default();
+    let title = if !sort_field.has_direction()
+        || matches!(
+            SortField::ALL.get(*selected).copied(),
+            Some(field) if !field.has_direction()
+        ) {
+        "sort (default / rank)  Enter apply".into()
+    } else {
+        format!("sort ({})  d toggles", sort_dir.label())
+    };
     frame.render_widget(
-        List::new(items).block(Block::default().borders(Borders::ALL).title(format!(
-            "sort ({})  d toggles",
-            app.config.view.sort_dir.label()
-        ))),
+        List::new(items).block(Block::default().borders(Borders::ALL).title(title)),
         box_area,
     );
 }
@@ -206,7 +220,7 @@ pub fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_filter_menu(frame: &mut Frame, form: &crate::app::FilterForm, area: Rect) {
-    let box_area = popup(area, 64, 10);
+    let box_area = popup(area, 64, 11);
     clear_popup(frame, box_area);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -215,8 +229,8 @@ fn draw_filter_menu(frame: &mut Frame, form: &crate::app::FilterForm, area: Rect
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
-            Constraint::Length(1),
             Constraint::Min(1),
+            Constraint::Length(1),
             Constraint::Length(1),
         ])
         .split(box_area);
@@ -245,9 +259,14 @@ fn draw_filter_menu(frame: &mut Frame, form: &crate::app::FilterForm, area: Rect
         &form.assignee_label(),
         form.focus == 2,
     );
-    menu_row(frame, chunks[3], "apply", "", form.focus == 3);
+    let buttons = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(chunks[4]);
+    draw_button(frame, buttons[0], "Apply", form.focus == 3);
+    draw_button(frame, buttons[1], "Clear filters", form.focus == 4);
     frame.render_widget(
-        Paragraph::new("Enter open or apply   Esc cancel"),
+        Paragraph::new("Enter open or activate   Esc cancel"),
         chunks[5],
     );
 }
@@ -258,16 +277,17 @@ fn menu_row(frame: &mut Frame, area: Rect, label: &str, value: &str, focused: bo
     } else {
         format!("  {value}")
     };
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                format!("{label}:"),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(shown, focus_style(focused)),
-        ])),
-        area,
-    );
+    let mut spans = vec![
+        Span::styled(
+            format!("{label}:"),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(shown, focus_style(focused)),
+    ];
+    if focused {
+        spans.push(Span::styled("█", cursor_style()));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn draw_checklist(
@@ -306,7 +326,7 @@ fn draw_checklist(
         List::new(items).block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(format!("{title}   space toggle   Enter back")),
+                .title(format!("{title}   space toggle   a select all   Enter back")),
         ),
         box_area,
     );
@@ -342,7 +362,7 @@ fn draw_assignee_checklist(
         List::new(rows).block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("filter assignee   space toggle   Enter back"),
+                .title("filter assignee   space toggle   a select all   Enter back"),
         ),
         box_area,
     );

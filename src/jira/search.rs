@@ -1,12 +1,11 @@
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
 use crate::error::Result;
 use crate::jira::client::JiraClient;
 use crate::jira::models::{SearchPage, Sprint};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortField {
+    /// Board backlog order (`ORDER BY Rank ASC`).
+    Default,
     Priority,
     Status,
     Key,
@@ -18,7 +17,8 @@ pub enum SortField {
 }
 
 impl SortField {
-    pub const ALL: [SortField; 8] = [
+    pub const ALL: [SortField; 9] = [
+        SortField::Default,
         SortField::Priority,
         SortField::Status,
         SortField::Key,
@@ -31,6 +31,7 @@ impl SortField {
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::Default => "Default",
             Self::Priority => "Priority",
             Self::Status => "Status",
             Self::Key => "Key",
@@ -42,28 +43,33 @@ impl SortField {
         }
     }
 
-    pub fn jql_name(self, story_points_field: Option<&str>) -> String {
+    /// Whether direction can be toggled for this field.
+    pub fn has_direction(self) -> bool {
+        !matches!(self, Self::Default)
+    }
+
+    pub fn jql_name(self, story_points_field: Option<&str>) -> Option<String> {
         match self {
-            Self::Priority => "priority".into(),
-            Self::Status => "status".into(),
-            Self::Key => "key".into(),
-            Self::Assignee => "assignee".into(),
-            Self::Created => "created".into(),
-            Self::Updated => "updated".into(),
-            Self::Summary => "summary".into(),
-            Self::StoryPoints => story_points_field.unwrap_or("cf[10016]").to_string(),
+            Self::Default => Some("Rank".into()),
+            Self::Priority => Some("priority".into()),
+            Self::Status => Some("status".into()),
+            Self::Key => Some("key".into()),
+            Self::Assignee => Some("assignee".into()),
+            Self::Created => Some("created".into()),
+            Self::Updated => Some("updated".into()),
+            Self::Summary => Some("summary".into()),
+            Self::StoryPoints => Some(story_points_field.unwrap_or("cf[10016]").to_string()),
         }
     }
 }
 
 impl Default for SortField {
     fn default() -> Self {
-        Self::Priority
+        Self::Default
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SortDir {
     #[default]
     Desc,
@@ -95,7 +101,7 @@ impl SortDir {
 
 /// Selected assignees. An empty filter matches everyone.
 ///
-/// `me` is only the legacy config value. Once the current account id is known,
+/// `me` is a temporary flag until the current account id is known;
 /// [`AssigneeFilter::resolve_me`] folds it into `accounts` so the same person
 /// is not stored twice.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -121,7 +127,7 @@ impl AssigneeFilter {
         self.accounts = seen;
     }
 
-    /// Replace a legacy `me` flag with the current account id, dropping a duplicate.
+    /// Replace a `me` flag with the current account id, dropping a duplicate.
     pub fn resolve_me(&mut self, self_id: &str) {
         let self_id = self_id.trim();
         if self_id.is_empty() {
@@ -191,7 +197,10 @@ impl AssigneeFilter {
         }
     }
 
-    pub fn footer_label(&self, self_id: Option<&str>) -> String {
+    pub fn footer_label<'a, F>(&self, self_id: Option<&str>, mut display_name: F) -> String
+    where
+        F: FnMut(&str) -> Option<&'a str>,
+    {
         let mut filter = self.clone();
         if let Some(id) = self_id {
             filter.resolve_me(id);
@@ -210,90 +219,13 @@ impl AssigneeFilter {
         for id in &filter.accounts {
             if id == self_id && !self_id.is_empty() {
                 parts.push("you".to_string());
+            } else if let Some(name) = display_name(id) {
+                parts.push(name.to_string());
             } else {
                 parts.push(id.clone());
             }
         }
         parts.join(", ")
-    }
-}
-
-fn slice_is_empty(accounts: &&[String]) -> bool {
-    accounts.is_empty()
-}
-
-impl Serialize for AssigneeFilter {
-    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
-        #[derive(Serialize)]
-        struct Raw<'a> {
-            #[serde(skip_serializing_if = "std::ops::Not::not")]
-            unassigned: bool,
-            #[serde(skip_serializing_if = "slice_is_empty")]
-            accounts: &'a [String],
-            #[serde(skip_serializing_if = "std::ops::Not::not")]
-            me: bool,
-        }
-        Raw {
-            unassigned: self.unassigned,
-            accounts: &self.accounts,
-            me: self.me,
-        }
-        .serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for AssigneeFilter {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Raw {
-            Legacy(String),
-            Account {
-                account: String,
-            },
-            Set {
-                #[serde(default)]
-                unassigned: bool,
-                #[serde(default)]
-                accounts: Vec<String>,
-                #[serde(default)]
-                me: bool,
-            },
-        }
-        let filter = match Raw::deserialize(deserializer)? {
-            Raw::Legacy(value) => match value.as_str() {
-                "any" | "" => AssigneeFilter::default(),
-                "me" => AssigneeFilter {
-                    me: true,
-                    ..AssigneeFilter::default()
-                },
-                "unassigned" => AssigneeFilter {
-                    unassigned: true,
-                    ..AssigneeFilter::default()
-                },
-                other => {
-                    return Err(serde::de::Error::custom(format!(
-                        "unknown assignee filter {other}"
-                    )));
-                }
-            },
-            Raw::Account { account } => AssigneeFilter {
-                accounts: vec![account],
-                ..AssigneeFilter::default()
-            },
-            Raw::Set {
-                unassigned,
-                accounts,
-                me,
-            } => AssigneeFilter {
-                unassigned,
-                accounts,
-                me,
-            },
-        };
-        let mut filter = filter;
-        filter.dedup_accounts();
-        Ok(filter)
     }
 }
 
@@ -334,7 +266,7 @@ impl SearchBuilder {
     pub fn new() -> Self {
         Self {
             max_results: 50,
-            sort_field: SortField::Priority,
+            sort_field: SortField::Default,
             sort_dir: SortDir::Desc,
             fields: default_fields(None),
             fields_by_keys: true,
@@ -420,7 +352,6 @@ impl SearchBuilder {
         self
     }
 
-    #[allow(dead_code)]
     pub fn max_results(mut self, max: u32) -> Self {
         self.max_results = max;
         self
@@ -474,14 +405,26 @@ impl SearchBuilder {
         }
         clauses.extend(self.extra_clauses);
 
+        let sort_dir = if self.sort_field.has_direction() {
+            self.sort_dir
+        } else {
+            SortDir::Asc
+        };
         let mut jql = if clauses.is_empty() {
-            "order by created DESC".to_string()
+            match self.sort_field.jql_name(self.story_points_field.as_deref()) {
+                Some(field) => format!("order by {field} {}", sort_dir.as_jql()),
+                None => String::new(),
+            }
         } else {
             clauses.join(" AND ")
         };
-        if !jql.to_ascii_lowercase().contains("order by") {
-            let field = self.sort_field.jql_name(self.story_points_field.as_deref());
-            jql.push_str(&format!(" ORDER BY {field} {}", self.sort_dir.as_jql()));
+        if let Some(field) = self
+            .sort_field
+            .jql_name(self.story_points_field.as_deref())
+        {
+            if !jql.is_empty() && !jql.to_ascii_lowercase().contains("order by") {
+                jql.push_str(&format!(" ORDER BY {field} {}", sort_dir.as_jql()));
+            }
         }
 
         let fields = if self.fields.is_empty() {
@@ -835,6 +778,45 @@ mod tests {
     }
 
     #[test]
+    fn default_sort_orders_by_rank_asc() {
+        let req = SearchBuilder::new()
+            .project("ABC")
+            .sprint(SprintRef::Backlog)
+            .order_by(SortField::Default, SortDir::Desc)
+            .build();
+        assert!(req.jql.contains("project = \"ABC\""));
+        assert!(req.jql.contains("sprint is EMPTY"));
+        assert!(req.jql.contains("ORDER BY Rank ASC"));
+    }
+
+    #[test]
+    fn backlog_hides_epics_and_subtasks_via_clause() {
+        let req = SearchBuilder::new()
+            .project("ABC")
+            .sprint(SprintRef::Backlog)
+            .clause("issuetype != Epic AND issuetype not in subTaskIssueTypes()")
+            .order_by(SortField::Default, SortDir::Asc)
+            .build();
+        assert!(req.jql.contains("issuetype != Epic"));
+        assert!(req.jql.contains("issuetype not in subTaskIssueTypes()"));
+    }
+
+    #[test]
+    fn footer_label_prefers_display_names() {
+        let filter = AssigneeFilter {
+            accounts: vec!["abc".into(), "xyz".into()],
+            unassigned: true,
+            ..AssigneeFilter::default()
+        };
+        let label = filter.footer_label(Some("abc"), |id| match id {
+            "abc" => Some("Alice"),
+            "xyz" => Some("Bob"),
+            _ => None,
+        });
+        assert_eq!(label, "unassigned, you, Bob");
+    }
+
+    #[test]
     fn assignee_jql_skips_empty_and_does_not_double_count_me() {
         assert_eq!(AssigneeFilter::default().jql_clause(None), None);
 
@@ -863,18 +845,6 @@ mod tests {
             both.jql_clause(None).as_deref(),
             Some("(assignee in (\"abc\", \"other\") OR assignee is EMPTY)")
         );
-    }
-
-    #[test]
-    fn assignee_filter_loads_legacy_config() {
-        let any: AssigneeFilter = serde_json::from_str("\"any\"").unwrap();
-        assert!(any.is_empty());
-        let me: AssigneeFilter = serde_json::from_str("\"me\"").unwrap();
-        assert!(me.me);
-        let unassigned: AssigneeFilter = serde_json::from_str("\"unassigned\"").unwrap();
-        assert!(unassigned.unassigned);
-        let account: AssigneeFilter = serde_json::from_str("{\"account\":\"abc\"}").unwrap();
-        assert_eq!(account.accounts, vec!["abc".to_string()]);
     }
 
     #[test]

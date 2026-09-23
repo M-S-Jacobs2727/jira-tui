@@ -176,6 +176,26 @@ impl<'a> IssueFacade<'a> {
         Ok(())
     }
 
+    pub async fn set_sprint(&self, issue_id_or_key: &str, sprint_id: Option<i64>) -> Result<()> {
+        let Some(field) = SearchFacade::new(self.client).sprint_field_id().await? else {
+            return Err(crate::error::Error::message(
+                "could not find the Jira Sprint field to move the issue",
+            ));
+        };
+        let mut fields = json!({});
+        fields[field] = match sprint_id {
+            Some(id) => json!(id),
+            None => Value::Null,
+        };
+        self.client
+            .put_json(
+                &format!("api/3/issue/{issue_id_or_key}"),
+                &json!({ "fields": fields }),
+            )
+            .await?;
+        Ok(())
+    }
+
     pub async fn transitions(&self, issue_id_or_key: &str) -> Result<Vec<Transition>> {
         let value = self
             .client
@@ -271,6 +291,7 @@ impl<'a> IssueFacade<'a> {
         })
     }
 
+    /// Returns `(statuses, issue_types)` for the project.
     pub async fn project_filter_options(
         &self,
         project_key: &str,
@@ -312,11 +333,12 @@ fn parse_users(value: &Value) -> Vec<User> {
     users
 }
 
+/// Returns `(statuses, issue_types)`.
 fn parse_project_statuses(value: &Value) -> (Vec<String>, Vec<String>) {
     let mut types = Vec::new();
     let mut statuses = Vec::new();
     let Some(issue_types) = value.as_array() else {
-        return (types, statuses);
+        return (statuses, types);
     };
     for issue_type in issue_types {
         if let Some(name) = issue_type.get("name").and_then(Value::as_str) {
@@ -332,7 +354,7 @@ fn parse_project_statuses(value: &Value) -> (Vec<String>, Vec<String>) {
     }
     sort_names(&mut types);
     sort_names(&mut statuses);
-    (types, statuses)
+    (statuses, types)
 }
 
 fn push_unique(items: &mut Vec<String>, name: &str) {

@@ -20,6 +20,10 @@ impl<'a> ScrollText<'a> {
     pub fn new(text: &'a str, scroll: u16) -> Self {
         Self { text, scroll }
     }
+
+    pub fn line_count(text: &str, width: usize) -> usize {
+        wrap_text(text, width).len()
+    }
 }
 
 impl Widget for ScrollText<'_> {
@@ -30,6 +34,9 @@ impl Widget for ScrollText<'_> {
         let width = area.width as usize;
         let rows = wrap_text(self.text, width);
         let start = usize::from(self.scroll);
+        let height = usize::from(area.height);
+        let more_up = start > 0;
+        let more_down = start.saturating_add(height) < rows.len();
         for row in 0..area.height {
             let y = area.y + row;
             for x in area.left()..area.right() {
@@ -37,6 +44,19 @@ impl Widget for ScrollText<'_> {
             }
             if let Some(line) = rows.get(start + usize::from(row)) {
                 buf.set_stringn(area.x, y, line, width, Style::default());
+            }
+            // Continuation markers in the rightmost cell of the first/last row.
+            if width > 0 {
+                let mark = if row == 0 && more_up {
+                    Some("↑")
+                } else if usize::from(row) + 1 == height && more_down {
+                    Some("↓")
+                } else {
+                    None
+                };
+                if let Some(mark) = mark {
+                    buf.set_stringn(area.right() - 1, y, mark, 1, Style::default());
+                }
             }
         }
     }
@@ -147,7 +167,16 @@ mod tests {
         let area = Rect::new(0, 0, 8, 2);
         let mut buf = Buffer::filled(area, Cell::new("X"));
         ScrollText::new("one\ntwo\nthree", 1).render(area, &mut buf);
-        assert_eq!(buf, Buffer::with_lines(["two     ", "three   "]));
+        // ↑ on the first visible row when scrolled down.
+        assert_eq!(buf, Buffer::with_lines(["two    ↑", "three   "]));
+    }
+
+    #[test]
+    fn shows_down_marker_when_more_below() {
+        let area = Rect::new(0, 0, 8, 2);
+        let mut buf = Buffer::filled(area, Cell::new("X"));
+        ScrollText::new("one\ntwo\nthree", 0).render(area, &mut buf);
+        assert_eq!(buf, Buffer::with_lines(["one     ", "two    ↓"]));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Privacy policy
 
-Last updated: 21 September 2026.
+Last updated: 23 September 2026.
 
 jira-tui does not collect issue data for this project. There is no account and no telemetry. Your Jira issues stay between the computer where you run jira-tui and Atlassian. Login and token refresh go through a token service, which by default is `https://jira-tui-token-service-ptjqxekmlq-uc.a.run.app`.
 
@@ -9,12 +9,12 @@ jira-tui does not collect issue data for this project. There is no account and n
 jira-tui stores:
 
 - OAuth access and refresh tokens in the OS keyring and in `~/.config/jira-tui/credentials.toml` (mode `0600`)
-- The OAuth client id, selected site, board, and view preferences in `~/.config/jira-tui/config.toml`
+- The OAuth client id, selected site, and board in `~/.config/jira-tui/config.toml`
 - Operational logs in `~/.local/state/jira-tui/`
 
 Logs record failures and counts. They are not a copy of your issues or tokens.
 
-`:logout` revokes the tokens at Atlassian and deletes the local copies. Preferences stay until you delete the config file. Uninstalling is deleting those files and the keyring entry named `jira-tui` / `oauth-tokens`.
+`:logout` revokes the tokens at Atlassian and deletes the local copies. Preferences (site, board) stay until you delete the config file. Uninstalling is deleting those files and the keyring entry named `jira-tui` / `oauth-tokens`.
 
 ## What leaves your computer
 

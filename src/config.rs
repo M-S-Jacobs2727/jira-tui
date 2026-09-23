@@ -25,28 +25,22 @@ pub struct Config {
     pub story_points_field: Option<String>,
     #[serde(default = "default_columns")]
     pub columns: Vec<String>,
-    #[serde(default)]
-    pub view: ViewConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Per-tab filter/sort rules for the current session (not persisted).
+#[derive(Debug, Clone)]
 pub struct ViewConfig {
-    #[serde(default = "default_sort_field")]
     pub sort_field: SortField,
-    #[serde(default)]
     pub sort_dir: SortDir,
-    #[serde(default)]
     pub filter_statuses: Vec<String>,
-    #[serde(default)]
     pub filter_types: Vec<String>,
-    #[serde(default)]
     pub filter_assignee: AssigneeFilter,
 }
 
 impl Default for ViewConfig {
     fn default() -> Self {
         Self {
-            sort_field: default_sort_field(),
+            sort_field: SortField::Default,
             sort_dir: SortDir::default(),
             filter_statuses: Vec::new(),
             filter_types: Vec::new(),
@@ -64,7 +58,6 @@ impl Default for Config {
             project_key: None,
             story_points_field: None,
             columns: default_columns(),
-            view: ViewConfig::default(),
         }
     }
 }
@@ -100,10 +93,6 @@ pub(crate) fn migrate_columns(columns: &mut Vec<String>) -> bool {
     } else {
         false
     }
-}
-
-fn default_sort_field() -> SortField {
-    SortField::Priority
 }
 
 impl Config {
@@ -161,46 +150,37 @@ mod tests {
         let cfg = Config::default();
         let encoded = toml::to_string(&cfg).unwrap();
         let decoded: Config = toml::from_str(&encoded).unwrap();
-        assert_eq!(decoded.view.sort_field, SortField::Priority);
-        assert_eq!(decoded.view.sort_dir, SortDir::Desc);
         assert_eq!(decoded.columns, default_columns());
-        assert!(decoded.view.filter_assignee.is_empty());
+        assert!(decoded.board_id.is_none());
     }
 
     #[test]
-    fn view_persistence_fields() {
-        let mut cfg = Config::default();
-        cfg.view.sort_field = SortField::Status;
-        cfg.view.sort_dir = SortDir::Asc;
-        cfg.view.filter_statuses = vec!["In Progress".into()];
-        cfg.view.filter_types = vec!["Bug".into()];
-        cfg.view.filter_assignee = AssigneeFilter {
-            accounts: vec!["abc".into()],
-            unassigned: true,
-            ..AssigneeFilter::default()
-        };
-        let encoded = toml::to_string(&cfg).unwrap();
-        let decoded: Config = toml::from_str(&encoded).unwrap();
-        assert_eq!(decoded.view.sort_field, SortField::Status);
-        assert_eq!(decoded.view.sort_dir, SortDir::Asc);
-        assert_eq!(decoded.view.filter_statuses, vec!["In Progress"]);
-        assert_eq!(decoded.view.filter_types, vec!["Bug"]);
-        assert_eq!(decoded.view.filter_assignee.accounts, vec!["abc"]);
-        assert!(decoded.view.filter_assignee.unassigned);
-    }
-
-    #[test]
-    fn legacy_assignee_and_columns_migrate() {
+    fn ignores_legacy_view_section_on_load() {
         let decoded: Config = toml::from_str(
             r#"
-            columns = ["key", "issuetype", "priority", "status", "assignee", "story_points", "summary"]
+            board_id = 1
             [view]
+            sort_field = "status"
             filter_assignee = "me"
             "#,
         )
         .unwrap();
-        assert!(decoded.view.filter_assignee.me);
-        let mut columns = decoded.columns;
+        assert_eq!(decoded.board_id, Some(1));
+    }
+
+    #[test]
+    fn view_config_defaults() {
+        let view = ViewConfig::default();
+        assert_eq!(view.sort_field, SortField::Default);
+        assert_eq!(view.sort_dir, SortDir::Desc);
+        assert!(view.filter_statuses.is_empty());
+        assert!(view.filter_types.is_empty());
+        assert!(view.filter_assignee.is_empty());
+    }
+
+    #[test]
+    fn legacy_columns_migrate() {
+        let mut columns = legacy_default_columns();
         assert!(migrate_columns(&mut columns));
         assert_eq!(columns, default_columns());
 

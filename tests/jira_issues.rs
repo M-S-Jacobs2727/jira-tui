@@ -123,6 +123,19 @@ async fn assign_and_unassign_put_account_id() {
 }
 
 #[tokio::test]
+async fn set_sprint_puts_sprint_field_or_null() {
+    let jira = JiraMock::start().await;
+    jira.mock_json("GET", "api/3/field", &fixture("fields.json"))
+        .await;
+    jira.mock_json("PUT", "api/3/issue/DEMO-1", "null").await;
+
+    let facade = IssueFacade::new(&jira.client);
+    facade.set_sprint("DEMO-1", Some(12)).await.unwrap();
+    facade.set_sprint("DEMO-1", None).await.unwrap();
+    insta::assert_json_snapshot!(jira.json_bodies_for("PUT", "api/3/issue/DEMO-1").await);
+}
+
+#[tokio::test]
 async fn transitions_parse_required_fields() {
     let jira = JiraMock::start().await;
     jira.mock_json(

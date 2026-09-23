@@ -62,6 +62,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                     board::draw(frame, app, content);
                     forms::draw_transition(frame, app, content);
                 }
+                Overlay::MoveSprint { .. } => {
+                    board::draw(frame, app, content);
+                    forms::draw_move_sprint(frame, app, content);
+                }
             }
             if app.show_help {
                 dialogs::draw_help(frame, content);
@@ -119,6 +123,18 @@ pub fn focus_style(focused: bool) -> Style {
     } else {
         Style::default()
     }
+}
+
+pub fn draw_button(frame: &mut Frame, area: Rect, label: &str, focused: bool) {
+    let text = if focused {
+        format!("[ {label} ]")
+    } else {
+        format!("  {label}  ")
+    };
+    frame.render_widget(
+        Paragraph::new(Span::styled(text, focus_style(focused))),
+        area,
+    );
 }
 
 pub fn draw_labeled_input(

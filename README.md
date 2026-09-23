@@ -19,7 +19,7 @@ The TUI authenticates through a hosted token service that holds the Atlassian cl
 
 If several sites are available, pick one; then pick a board. Tokens and preferences are stored under the XDG config directory:
 
-- `~/.config/jira-tui/config.toml` — cloud id, board, columns, last sort/filter
+- `~/.config/jira-tui/config.toml` — cloud id, board, columns
 - `~/.config/jira-tui/credentials.toml` — tokens (mode `0600`), used if the OS keyring is unavailable
 - `~/.local/state/jira-tui/jira-tui.log` — application logs
 
@@ -34,24 +34,25 @@ Until Atlassian finishes reviewing the shared app, you may see an unapproved-app
 | Key | Action |
 | --- | --- |
 | `j` / `k` | Move selection |
-| `h` / `l` / `←` / `→` / `Tab` / `[` / `]` | Switch sprint / backlog tabs |
-| `s` | Sort (persisted) |
-| `f` | Filter (persisted) |
+| `h` / `l` / `←` / `→` / `Tab` | Switch sprint / backlog tabs |
+| `s` | Sort (per tab, session only) |
+| `f` | Filter (per tab, session only) |
 | `/` | Search current tab (session only) |
 | `r` | Refresh |
 | `p` | Change project / board |
 | `Enter` | View issue |
-| `n` / `c` | Create story |
+| `n` | Create story |
 | `e` | Edit issue |
 | `d` | Delete issue (confirm) |
 | `a` | Assign (`Ctrl+u` unassigns) |
 | `t` | Transition |
+| `m` | Move to sprint / backlog |
 | `:` | Command (`logout`, `login`, `project`, `quit`) |
 | `?` | Help |
 | `Esc` | Close overlay |
 | `q` | Quit (stays logged in) |
 
-`:logout` revokes the access/refresh tokens and returns to the login screen. Board and view preferences are kept.
+`:logout` revokes the access/refresh tokens and returns to the login screen. Board preferences are kept.
 
 ## Config
 
@@ -64,16 +65,9 @@ board_id = 123
 project_key = "ABC"
 story_points_field = "customfield_10016"
 columns = ["key", "summary", "issuetype", "priority", "status", "assignee", "story_points"]
-
-[view]
-sort_field = "priority"
-sort_dir = "desc"
-filter_statuses = []
-filter_types = []
-filter_assignee = { accounts = [], unassigned = false }
 ```
 
-An empty `filter_assignee` matches every assignee. Older configs (`"any"`, `"me"`, `"unassigned"`, `{ account = "..." }`) still load. `"me"` is stored as your account id once login can see it, so it is not kept alongside that id.
+Filter and sort are per sprint/backlog tab and last only for the current session (not written to config). An empty assignee filter matches every assignee.
 
 The story points field is discovered from the board estimation configuration when possible (classic “Story Points” vs team-managed “Story point estimate”).
 

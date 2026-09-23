@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures::StreamExt;
 use ratatui::DefaultTerminal;
@@ -10,7 +12,7 @@ use crate::auth::oauth::{
     token_service_url,
 };
 use crate::auth::store::{StoredTokens, TokenStore};
-use crate::config::Config;
+use crate::config::{Config, ViewConfig};
 use crate::error::Result;
 use crate::jira::agile::AgileFacade;
 use crate::jira::client::JiraClient;
@@ -81,6 +83,10 @@ pub enum Overlay {
         items: Vec<Transition>,
         selected: usize,
     },
+    MoveSprint {
+        items: Vec<SprintChoice>,
+        selected: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -148,7 +154,7 @@ pub struct AssignForm {
     pub selected: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TabKind {
     Sprint(i64),
     Backlog,
@@ -162,6 +168,7 @@ pub struct Tab {
     pub selected: usize,
     pub next_page: Option<String>,
     pub loaded: bool,
+    pub view: ViewConfig,
 }
 
 enum AppMsg {
@@ -219,7 +226,13 @@ pub struct App {
     pub loading: bool,
     pub search_query: String,
     pub self_account_id: Option<String>,
+    /// account_id → display name for footer/filter labels.
+    user_names: HashMap<String, String>,
     pub should_quit: bool,
+    /// Visible issue rows in the board table (updated each draw).
+    pub list_rows: usize,
+    /// First visible issue row offset (updated each draw).
+    pub list_offset: usize,
     client: Option<JiraClient>,
     tx: mpsc::UnboundedSender<AppMsg>,
 }
@@ -276,7 +289,10 @@ impl App {
             loading: false,
             search_query: String::new(),
             self_account_id: None,
+            user_names: HashMap::new(),
             should_quit: false,
+            list_rows: 20,
+            list_offset: 0,
             client: None,
             tx,
         };
@@ -319,18 +335,17 @@ impl App {
         self.tabs.get_mut(self.tab_idx)
     }
 
+    pub fn current_view(&self) -> Option<&ViewConfig> {
+        self.current_tab().map(|tab| &tab.view)
+    }
+
+    pub fn current_view_mut(&mut self) -> Option<&mut ViewConfig> {
+        self.current_tab_mut().map(|tab| &mut tab.view)
+    }
+
     pub fn selected_issue(&self) -> Option<&Issue> {
         let tab = self.current_tab()?;
         tab.issues.get(tab.selected)
-    }
-
-    fn persist_view(&mut self, config: &mut Config) {
-        config.view = self.config.view.clone();
-        if let Err(err) = config.save() {
-            self.set_status(format!("failed to save config: {err}"), true);
-        } else {
-            self.config.view = config.view.clone();
-        }
     }
 
     fn handle_key(&mut self, key: KeyEvent, config: &mut Config) {
@@ -414,12 +429,12 @@ impl App {
         }
         if let Overlay::Sort { selected } = &self.overlay {
             let selected = *selected;
-            self.handle_sort_key(key, selected, config);
+            self.handle_sort_key(key, selected);
             return;
         }
         if let Overlay::Filter(form) = &self.overlay {
             let mut form = form.clone();
-            if self.handle_filter_key(key, &mut form, config) {
+            if self.handle_filter_key(key, &mut form) {
                 self.overlay = Overlay::None;
             } else {
                 self.overlay = Overlay::Filter(form);
@@ -481,6 +496,7 @@ impl App {
                 }
                 KeyCode::Char('a') => self.open_assign(),
                 KeyCode::Char('t') => self.open_transitions(),
+                KeyCode::Char('m') => self.open_move_sprint(),
                 KeyCode::Char('d') => {
                     if let Some(issue) = self.selected_issue() {
                         self.overlay = Overlay::DeleteConfirm {
@@ -510,6 +526,18 @@ impl App {
                     self.overlay = Overlay::None;
                 }
             }
+            Overlay::MoveSprint { selected, items } => {
+                move_sel(selected, items.len(), key);
+                if key.code == KeyCode::Enter {
+                    if let Some(choice) = items.get(*selected).cloned() {
+                        if let Some(issue) = self.selected_issue().cloned() {
+                            self.move_issue_sprint(issue.key, choice.id, choice.name);
+                        }
+                    }
+                } else if key.code == KeyCode::Esc {
+                    self.overlay = Overlay::None;
+                }
+            }
             Overlay::None
             | Overlay::Sort { .. }
             | Overlay::Filter(_)
@@ -529,9 +557,9 @@ impl App {
                 }
             }
             KeyCode::Char('s') => {
-                let selected = SortField::ALL
-                    .iter()
-                    .position(|f| *f == self.config.view.sort_field)
+                let selected = self
+                    .current_view()
+                    .and_then(|view| SortField::ALL.iter().position(|f| *f == view.sort_field))
                     .unwrap_or(0);
                 self.overlay = Overlay::Sort { selected };
             }
@@ -554,7 +582,7 @@ impl App {
                     self.fetch_issue(issue.key);
                 }
             }
-            KeyCode::Char('c') | KeyCode::Char('n') => self.open_create(),
+            KeyCode::Char('n') => self.open_create(),
             KeyCode::Char('e') => {
                 if let Some(issue) = self.selected_issue().cloned() {
                     self.open_edit(issue);
@@ -569,9 +597,10 @@ impl App {
             }
             KeyCode::Char('a') => self.open_assign(),
             KeyCode::Char('t') => self.open_transitions(),
+            KeyCode::Char('m') => self.open_move_sprint(),
             KeyCode::BackTab => self.switch_tab(-1),
-            KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('[') => self.switch_tab(-1),
-            KeyCode::Right | KeyCode::Char('l') | KeyCode::Char(']') => self.switch_tab(1),
+            KeyCode::Left | KeyCode::Char('h') => self.switch_tab(-1),
+            KeyCode::Right | KeyCode::Char('l') => self.switch_tab(1),
             KeyCode::Tab | KeyCode::Char('\t') => {
                 if key.modifiers.contains(KeyModifiers::SHIFT) {
                     self.switch_tab(-1);
@@ -595,7 +624,7 @@ impl App {
         let _ = config;
     }
 
-    fn handle_sort_key(&mut self, key: KeyEvent, selected: usize, config: &mut Config) {
+    fn handle_sort_key(&mut self, key: KeyEvent, selected: usize) {
         let mut selected = selected;
         match key.code {
             KeyCode::Esc => {
@@ -603,11 +632,17 @@ impl App {
                 return;
             }
             KeyCode::Char('d') => {
-                self.config.view.sort_dir = self.config.view.sort_dir.toggle();
+                let selected_field = SortField::ALL.get(selected).copied();
+                if selected_field.is_some_and(|f| f.has_direction()) {
+                    if let Some(view) = self.current_view_mut() {
+                        view.sort_dir = view.sort_dir.toggle();
+                    }
+                }
             }
             KeyCode::Enter => {
-                self.config.view.sort_field = SortField::ALL[selected];
-                self.persist_view(config);
+                if let Some(view) = self.current_view_mut() {
+                    view.sort_field = SortField::ALL[selected];
+                }
                 self.overlay = Overlay::None;
                 self.reload_current_tab();
                 return;
@@ -617,19 +652,19 @@ impl App {
         self.overlay = Overlay::Sort { selected };
     }
 
-    fn handle_filter_key(
-        &mut self,
-        key: KeyEvent,
-        form: &mut FilterForm,
-        config: &mut Config,
-    ) -> bool {
+    fn handle_filter_key(&mut self, key: KeyEvent, form: &mut FilterForm) -> bool {
         if matches!(form.pane, FilterPane::Menu) {
             match key.code {
                 KeyCode::Esc => return true,
-                KeyCode::Up | KeyCode::BackTab => form.focus = (form.focus + 3) % 4,
-                KeyCode::Down | KeyCode::Tab => form.focus = (form.focus + 1) % 4,
+                KeyCode::Up | KeyCode::BackTab => form.focus = (form.focus + 4) % 5,
+                KeyCode::Down | KeyCode::Tab => form.focus = (form.focus + 1) % 5,
                 KeyCode::Enter if form.focus == 3 => {
-                    self.apply_filter(form, config);
+                    self.apply_filter(form);
+                    return true;
+                }
+                KeyCode::Enter if form.focus == 4 => {
+                    form.clear();
+                    self.apply_filter(form);
                     return true;
                 }
                 KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') if form.focus < 3 => {
@@ -645,18 +680,17 @@ impl App {
             }
             KeyCode::Enter => form.commit_sub(),
             KeyCode::Char(' ') => form.toggle_sub(),
+            KeyCode::Char('a') => form.select_all_sub(),
             _ => form.move_sub(key),
         }
         false
     }
 
-    fn note_self_user(&mut self, user: &User, config: &mut Config) {
+    fn note_self_user(&mut self, user: &User) {
         self.self_account_id = Some(user.account_id.clone());
-        let mut assignee = self.config.view.filter_assignee.clone();
-        assignee.resolve_me(&user.account_id);
-        if assignee != self.config.view.filter_assignee {
-            self.config.view.filter_assignee = assignee;
-            self.persist_view(config);
+        self.remember_user(user);
+        if let Some(view) = self.current_view_mut() {
+            view.filter_assignee.resolve_me(&user.account_id);
         }
         if let Overlay::Filter(form) = &mut self.overlay {
             form.self_account_id = Some(user.account_id.clone());
@@ -664,9 +698,36 @@ impl App {
         }
     }
 
-    fn apply_filter(&mut self, form: &FilterForm, config: &mut Config) {
-        self.config.view.filter_statuses = form.statuses.clone();
-        self.config.view.filter_types = form.types.clone();
+    fn remember_user(&mut self, user: &User) {
+        if user.account_id.is_empty() || user.display_name.is_empty() {
+            return;
+        }
+        self.user_names
+            .insert(user.account_id.clone(), user.display_name.clone());
+    }
+
+    fn remember_users<I>(&mut self, users: I)
+    where
+        I: IntoIterator<Item = User>,
+    {
+        for user in users {
+            self.remember_user(&user);
+        }
+    }
+
+    pub fn user_display_name(&self, account_id: &str) -> Option<&str> {
+        self.user_names.get(account_id).map(String::as_str)
+    }
+
+    fn remember_issue_assignees(&mut self, issues: &[Issue]) {
+        for issue in issues {
+            if let Some(user) = &issue.assignee {
+                self.remember_user(user);
+            }
+        }
+    }
+
+    fn apply_filter(&mut self, form: &FilterForm) {
         let mut assignee = form.assignee.clone();
         if let Some(id) = form
             .self_account_id
@@ -675,13 +736,18 @@ impl App {
         {
             assignee.resolve_me(id);
         }
-        self.config.view.filter_assignee = assignee;
-        self.persist_view(config);
+        self.remember_users(form.users.iter().cloned());
+        if let Some(view) = self.current_view_mut() {
+            view.filter_statuses = form.statuses.clone();
+            view.filter_types = form.types.clone();
+            view.filter_assignee = assignee;
+        }
         self.reload_current_tab();
     }
 
     fn open_filter(&mut self) {
-        let mut form = FilterForm::from_view(&self.config.view);
+        let view = self.current_view().cloned().unwrap_or_default();
+        let mut form = FilterForm::from_view(&view);
         form.self_account_id = self.self_account_id.clone();
         if let Some(id) = &form.self_account_id {
             form.assignee.resolve_me(id);
@@ -732,8 +798,8 @@ impl App {
                         let delta = if key.code == KeyCode::Left { -1 } else { 1 };
                         nudge_picker(form, &layout, delta);
                     }
-                    KeyCode::Char(c @ ('h' | '[' | 'l' | ']')) if picker_focused(form, &layout) => {
-                        let delta = if matches!(c, 'h' | '[') { -1 } else { 1 };
+                    KeyCode::Char(c @ ('h' | 'l')) if picker_focused(form, &layout) => {
+                        let delta = if c == 'h' { -1 } else { 1 };
                         nudge_picker(form, &layout, delta);
                     }
                     KeyCode::Backspace => {
@@ -1152,11 +1218,7 @@ impl App {
         }
         let next = tab.selected as isize + delta;
         tab.selected = next.clamp(0, tab.issues.len() as isize - 1) as usize;
-        if tab.selected + 5 >= tab.issues.len() {
-            if tab.next_page.is_some() {
-                self.load_more();
-            }
-        }
+        self.maybe_load_more_at_end();
     }
 
     fn move_issue_abs(&mut self, idx: usize) {
@@ -1165,20 +1227,38 @@ impl App {
                 tab.selected = idx.min(tab.issues.len() - 1);
             }
         }
+        self.maybe_load_more_at_end();
+    }
+
+    fn maybe_load_more_at_end(&mut self) {
+        let Some(tab) = self.current_tab() else {
+            return;
+        };
+        if tab.issues.is_empty() {
+            return;
+        }
+        if tab.selected + 1 >= tab.issues.len() && tab.next_page.is_some() {
+            self.load_more();
+        }
+    }
+
+    fn page_size(&self) -> u32 {
+        (self.list_rows as u32).max(50)
     }
 
     fn builder_for_tab(&self, tab: &Tab) -> SearchBuilder {
-        let mut assignee = self.config.view.filter_assignee.clone();
+        let mut assignee = tab.view.filter_assignee.clone();
         if let Some(id) = &self.self_account_id {
             assignee.resolve_me(id);
         }
         let mut builder = SearchBuilder::new()
-            .status(self.config.view.filter_statuses.clone())
-            .issue_type(self.config.view.filter_types.clone())
+            .status(tab.view.filter_statuses.clone())
+            .issue_type(tab.view.filter_types.clone())
             .assignee(assignee)
-            .order_by(self.config.view.sort_field, self.config.view.sort_dir)
+            .order_by(tab.view.sort_field, tab.view.sort_dir)
             .story_points_field(self.config.story_points_field.clone())
-            .text(self.search_query.clone());
+            .text(self.search_query.clone())
+            .max_results(self.page_size());
         if let Some(project) = &self.config.project_key {
             builder = builder.project(project);
         }
@@ -1186,6 +1266,14 @@ impl App {
             TabKind::Sprint(id) => builder.sprint(SprintRef::Id(id)),
             TabKind::Backlog => builder.sprint(SprintRef::Backlog),
         };
+        // Backlog board hides epics/subtasks; keep them available via type filter or `/` search.
+        if matches!(tab.kind, TabKind::Backlog)
+            && tab.view.filter_types.is_empty()
+            && self.search_query.is_empty()
+        {
+            builder = builder
+                .clause("issuetype != Epic AND issuetype not in subTaskIssueTypes()");
+        }
         builder
     }
 
@@ -1210,8 +1298,10 @@ impl App {
         let Some(tab) = self.tabs.get(tab_idx) else {
             return;
         };
-        if append && tab.next_page.is_none() {
-            return;
+        if append {
+            if tab.next_page.is_none() || self.loading {
+                return;
+            }
         }
         let mut builder = self.builder_for_tab(tab);
         if append {
@@ -1507,6 +1597,39 @@ impl App {
         });
     }
 
+    fn open_move_sprint(&mut self) {
+        let Some(issue) = self.selected_issue().cloned() else {
+            return;
+        };
+        let tab_kind = self.current_tab().map(|tab| tab.kind.clone());
+        let mut items = sprint_choices(&self.tabs);
+        let selected = select_sprint_idx(&mut items, &issue, tab_kind.as_ref());
+        self.overlay = Overlay::MoveSprint { items, selected };
+    }
+
+    fn move_issue_sprint(&mut self, key: String, sprint_id: Option<i64>, name: String) {
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        self.loading = true;
+        self.overlay = Overlay::None;
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            match IssueFacade::new(&client).set_sprint(&key, sprint_id).await {
+                Ok(()) => {
+                    tracing::info!(key = %key, sprint = %name, "moved issue");
+                    let _ = tx.send(AppMsg::Done {
+                        message: format!("moved {key} to {name}"),
+                        refresh: true,
+                    });
+                }
+                Err(err) => {
+                    let _ = tx.send(AppMsg::Error(err.to_string()));
+                }
+            }
+        });
+    }
+
     fn handle_msg(&mut self, msg: AppMsg, config: &mut Config) {
         match msg {
             AppMsg::LoginReady { client_id, auth } => {
@@ -1565,15 +1688,27 @@ impl App {
                 self.set_status("select a board", false);
             }
             AppMsg::Sprints(sprints) => {
+                let prev_views: std::collections::HashMap<TabKind, ViewConfig> = self
+                    .tabs
+                    .iter()
+                    .map(|tab| (tab.kind.clone(), tab.view.clone()))
+                    .collect();
                 let mut tabs: Vec<Tab> = sprints
                     .into_iter()
-                    .map(|sprint| Tab {
-                        kind: TabKind::Sprint(sprint.id),
-                        title: sprint_title(&sprint),
-                        issues: Vec::new(),
-                        selected: 0,
-                        next_page: None,
-                        loaded: false,
+                    .map(|sprint| {
+                        let kind = TabKind::Sprint(sprint.id);
+                        Tab {
+                            view: prev_views
+                                .get(&kind)
+                                .cloned()
+                                .unwrap_or_default(),
+                            kind,
+                            title: sprint_title(&sprint),
+                            issues: Vec::new(),
+                            selected: 0,
+                            next_page: None,
+                            loaded: false,
+                        }
                     })
                     .collect();
                 tabs.push(Tab {
@@ -1583,6 +1718,10 @@ impl App {
                     selected: 0,
                     next_page: None,
                     loaded: false,
+                    view: prev_views
+                        .get(&TabKind::Backlog)
+                        .cloned()
+                        .unwrap_or_default(),
                 });
                 self.tabs = tabs;
                 self.tab_idx = 0;
@@ -1595,6 +1734,8 @@ impl App {
                 next_page,
                 append,
             } => {
+                let received = issues.len();
+                self.remember_issue_assignees(&issues);
                 if let Some(tab) = self.tabs.get_mut(tab_idx) {
                     if append {
                         tab.issues.extend(issues);
@@ -1606,8 +1747,19 @@ impl App {
                     tab.loaded = true;
                 }
                 self.set_status(String::new(), false);
+                if received > 0 {
+                    let need = self.list_rows.max(1);
+                    if let Some(tab) = self.tabs.get(tab_idx) {
+                        if tab.issues.len() < need && tab.next_page.is_some() {
+                            self.load_more();
+                        }
+                    }
+                }
             }
             AppMsg::Issue(issue) => {
+                if let Some(user) = &issue.assignee {
+                    self.remember_user(user);
+                }
                 if let Overlay::IssueDetail { issue: slot, .. } = &mut self.overlay {
                     *slot = Some(issue);
                 }
@@ -1623,12 +1775,14 @@ impl App {
                 _ => {}
             },
             AppMsg::Users(users) => {
+                self.remember_users(users.iter().cloned());
                 if let Overlay::Assign(form) = &mut self.overlay {
                     form.users = users;
                     form.selected = 0;
                 }
             }
             AppMsg::FormUsers(users) => {
+                self.remember_users(users.iter().cloned());
                 let self_id = self.self_account_id.clone();
                 match &mut self.overlay {
                     Overlay::Create(form) | Overlay::Edit(form) => {
@@ -1638,7 +1792,7 @@ impl App {
                 }
             }
             AppMsg::CurrentUser(user) => {
-                self.note_self_user(&user, config);
+                self.note_self_user(&user);
             }
             AppMsg::FilterOptions {
                 statuses,
@@ -1647,8 +1801,9 @@ impl App {
                 myself,
             } => {
                 if let Some(user) = myself {
-                    self.note_self_user(&user, config);
+                    self.note_self_user(&user);
                 }
+                self.remember_users(users.iter().cloned());
                 if let Overlay::Filter(form) = &mut self.overlay {
                     form.status_options = statuses;
                     form.type_options = types;
@@ -1716,6 +1871,12 @@ impl FilterForm {
         }
     }
 
+    fn clear(&mut self) {
+        self.statuses.clear();
+        self.types.clear();
+        self.assignee = AssigneeFilter::default();
+    }
+
     fn commit_sub(&mut self) {
         match &self.pane {
             FilterPane::Status { draft, .. } => {
@@ -1761,6 +1922,28 @@ impl FilterForm {
                 } else if let Some(id) = accounts.get(*cursor - 1) {
                     draft.toggle_account(id);
                 }
+            }
+            FilterPane::Menu => {}
+        }
+    }
+
+    fn select_all_sub(&mut self) {
+        match &mut self.pane {
+            FilterPane::Status { draft, .. } => {
+                *draft = self.status_options.clone();
+            }
+            FilterPane::Type { draft, .. } => {
+                *draft = self.type_options.clone();
+            }
+            FilterPane::Assignee { draft, .. } => {
+                draft.unassigned = true;
+                draft.me = false;
+                draft.accounts = self
+                    .users
+                    .iter()
+                    .map(|user| user.account_id.clone())
+                    .collect();
+                draft.dedup_accounts();
             }
             FilterPane::Menu => {}
         }

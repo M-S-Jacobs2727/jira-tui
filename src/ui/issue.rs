@@ -87,6 +87,17 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_section(frame: &mut Frame, area: Rect, title: &str, text: &str, scroll: u16) {
+    let inner_probe = Block::default().borders(Borders::TOP).inner(area);
+    let total = ScrollText::line_count(text, inner_probe.width as usize);
+    let height = inner_probe.height as usize;
+    let more_up = scroll > 0;
+    let more_down = (scroll as usize).saturating_add(height) < total;
+    let title = match (more_up, more_down) {
+        (true, true) => format!("{title} ↑↓"),
+        (true, false) => format!("{title} ↑"),
+        (false, true) => format!("{title} ↓"),
+        (false, false) => title.to_string(),
+    };
     let block = Block::default().borders(Borders::TOP).title(title);
     let inner = block.inner(area);
     frame.render_widget(block, area);

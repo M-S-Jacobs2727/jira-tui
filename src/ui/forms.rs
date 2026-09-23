@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 
 use crate::app::{App, Overlay};
-use crate::ui::{clear_popup, draw_labeled_input, focus_style, popup};
+use crate::ui::{clear_popup, draw_button, draw_labeled_input, focus_style, popup};
 
 pub fn draw_issue_form(frame: &mut Frame, app: &App, area: Rect) {
     let (title, form) = match &app.overlay {
@@ -167,15 +167,28 @@ pub fn draw_transition(frame: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-fn draw_button(frame: &mut Frame, area: Rect, label: &str, focused: bool) {
-    let text = if focused {
-        format!("[ {label} ]")
-    } else {
-        format!("  {label}  ")
+pub fn draw_move_sprint(frame: &mut Frame, app: &App, area: Rect) {
+    let Overlay::MoveSprint { items, selected } = &app.overlay else {
+        return;
     };
+    let height = (items.len() as u16).saturating_add(2).clamp(5, 18);
+    let box_area = popup(area, 48, height);
+    clear_popup(frame, box_area);
+    let lines: Vec<ListItem> = items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            let prefix = if i == *selected { "> " } else { "  " };
+            ListItem::new(format!("{prefix}{}", item.name))
+        })
+        .collect();
     frame.render_widget(
-        Paragraph::new(Span::styled(text, focus_style(focused))),
-        area,
+        List::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("move to sprint / backlog"),
+        ),
+        box_area,
     );
 }
 
