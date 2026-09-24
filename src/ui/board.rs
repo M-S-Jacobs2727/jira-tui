@@ -291,7 +291,7 @@ fn column_widths(columns: &[String], total: u16) -> Vec<Constraint> {
         .collect()
 }
 
-fn resolve_column_widths(columns: &[String], available: u16) -> Vec<u16> {
+pub(crate) fn resolve_column_widths(columns: &[String], available: u16) -> Vec<u16> {
     let constraints = column_widths(columns, available);
     let spacing = columns.len().saturating_sub(1) as u16;
     let mut fixed = 0u16;
@@ -315,13 +315,13 @@ fn resolve_column_widths(columns: &[String], available: u16) -> Vec<u16> {
         .collect()
 }
 
-fn summary_leads_to_type(columns: &[String]) -> bool {
+pub(crate) fn summary_leads_to_type(columns: &[String]) -> bool {
     columns.windows(2).any(|pair| {
         pair[0] == "summary" && matches!(pair[1].as_str(), "issuetype" | "type")
     })
 }
 
-fn with_leaders(text: &str, width: usize) -> String {
+pub(crate) fn with_leaders(text: &str, width: usize) -> String {
     if width == 0 {
         return String::new();
     }
@@ -339,7 +339,7 @@ fn with_leaders(text: &str, width: usize) -> String {
     out
 }
 
-fn cell_value(issue: &Issue, col: &str, _story_points_field: Option<&str>) -> String {
+pub(crate) fn cell_value(issue: &Issue, col: &str, _story_points_field: Option<&str>) -> String {
     match col {
         "key" => issue.key.clone(),
         "issuetype" | "type" => issue.issue_type.clone(),

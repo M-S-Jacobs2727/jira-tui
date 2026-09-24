@@ -76,8 +76,10 @@ pub enum Overlay {
         issue: Option<Issue>,
         children: Vec<Issue>,
         child_selected: usize,
+        children_scroll: usize,
         focus: DetailFocus,
-        scroll: u16,
+        desc_scroll: u16,
+        comment_scroll: u16,
     },
     Create(IssueForm),
     Edit(IssueForm),
@@ -106,6 +108,25 @@ pub enum Overlay {
 pub enum DetailFocus {
     Description,
     Children,
+    Comments,
+}
+
+impl DetailFocus {
+    fn next(self) -> Self {
+        match self {
+            Self::Description => Self::Children,
+            Self::Children => Self::Comments,
+            Self::Comments => Self::Description,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            Self::Description => Self::Comments,
+            Self::Children => Self::Description,
+            Self::Comments => Self::Children,
+        }
+    }
 }
 
 /// Restricts create-meta issue types when opening "create child".
@@ -270,6 +291,10 @@ pub struct App {
     pub list_rows: usize,
     /// First visible issue row offset (updated each draw).
     pub list_offset: usize,
+    /// Inner height of the focused issue-detail section (updated each draw).
+    pub detail_rows: usize,
+    /// Max scroll for the focused text section (updated each draw).
+    pub detail_max_scroll: u16,
     client: Option<JiraClient>,
     tx: mpsc::UnboundedSender<AppMsg>,
 }
@@ -330,6 +355,8 @@ impl App {
             should_quit: false,
             list_rows: 20,
             list_offset: 0,
+            detail_rows: 10,
+            detail_max_scroll: 0,
             client: None,
             tx,
         };
@@ -593,44 +620,32 @@ impl App {
                 _ => return,
             };
 
+        let page = (self.detail_rows / 2).max(1);
+
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => self.overlay = Overlay::None,
             KeyCode::Char('?') => self.show_help = true,
             KeyCode::Tab => {
                 if let Overlay::IssueDetail { focus, .. } = &mut self.overlay {
-                    *focus = match *focus {
-                        DetailFocus::Description => DetailFocus::Children,
-                        DetailFocus::Children => DetailFocus::Description,
-                    };
+                    *focus = focus.next();
+                }
+            }
+            KeyCode::BackTab => {
+                if let Overlay::IssueDetail { focus, .. } = &mut self.overlay {
+                    *focus = focus.prev();
                 }
             }
             KeyCode::Char('j') | KeyCode::Down => {
-                if let Overlay::IssueDetail {
-                    focus,
-                    scroll,
-                    child_selected,
-                    ..
-                } = &mut self.overlay
-                {
-                    match *focus {
-                        DetailFocus::Description => *scroll = scroll.saturating_add(1),
-                        DetailFocus::Children => move_sel(child_selected, children_len, key),
-                    }
-                }
+                self.detail_scroll_or_select(1, children_len, key);
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                if let Overlay::IssueDetail {
-                    focus,
-                    scroll,
-                    child_selected,
-                    ..
-                } = &mut self.overlay
-                {
-                    match *focus {
-                        DetailFocus::Description => *scroll = scroll.saturating_sub(1),
-                        DetailFocus::Children => move_sel(child_selected, children_len, key),
-                    }
-                }
+                self.detail_scroll_or_select(-1, children_len, key);
+            }
+            KeyCode::PageDown => {
+                self.detail_page(page as isize, children_len);
+            }
+            KeyCode::PageUp => {
+                self.detail_page(-(page as isize), children_len);
             }
             KeyCode::Char('p') => {
                 if let Some(key) = parent_key {
@@ -669,6 +684,71 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn detail_scroll_or_select(&mut self, delta: isize, children_len: usize, key: KeyEvent) {
+        let Overlay::IssueDetail {
+            focus,
+            desc_scroll,
+            comment_scroll,
+            child_selected,
+            children_scroll,
+            ..
+        } = &mut self.overlay
+        else {
+            return;
+        };
+        let rows = self.detail_rows.max(1);
+        let max_scroll = self.detail_max_scroll;
+        match *focus {
+            DetailFocus::Description => {
+                *desc_scroll = clamp_scroll_delta(*desc_scroll, delta, max_scroll);
+            }
+            DetailFocus::Comments => {
+                *comment_scroll = clamp_scroll_delta(*comment_scroll, delta, max_scroll);
+            }
+            DetailFocus::Children => {
+                move_sel(child_selected, children_len, key);
+                ensure_child_visible(child_selected, children_scroll, children_len, rows);
+            }
+        }
+    }
+
+    fn detail_page(&mut self, delta: isize, children_len: usize) {
+        let Overlay::IssueDetail {
+            focus,
+            desc_scroll,
+            comment_scroll,
+            child_selected,
+            children_scroll,
+            ..
+        } = &mut self.overlay
+        else {
+            return;
+        };
+        let rows = self.detail_rows.max(1);
+        let max_scroll = self.detail_max_scroll;
+        match *focus {
+            DetailFocus::Description => {
+                *desc_scroll = clamp_scroll_delta(*desc_scroll, delta, max_scroll);
+            }
+            DetailFocus::Comments => {
+                *comment_scroll = clamp_scroll_delta(*comment_scroll, delta, max_scroll);
+            }
+            DetailFocus::Children => {
+                if children_len == 0 {
+                    return;
+                }
+                let last = children_len - 1;
+                if delta > 0 {
+                    *child_selected = (*child_selected).saturating_add(delta as usize).min(last);
+                } else {
+                    *child_selected =
+                        (*child_selected).saturating_sub((-delta) as usize);
+                }
+                ensure_child_visible(child_selected, children_scroll, children_len, rows);
+            }
         }
     }
 
@@ -1651,8 +1731,10 @@ impl App {
             issue: None,
             children: Vec::new(),
             child_selected: 0,
+            children_scroll: 0,
             focus: DetailFocus::Description,
-            scroll: 0,
+            desc_scroll: 0,
+            comment_scroll: 0,
         };
         self.fetch_issue(key);
     }
@@ -2178,11 +2260,13 @@ impl App {
                 if let Overlay::IssueDetail {
                     children: slot,
                     child_selected,
+                    children_scroll,
                     ..
                 } = &mut self.overlay
                 {
                     *slot = children;
                     *child_selected = 0;
+                    *children_scroll = 0;
                 }
             }
             AppMsg::CreateMeta(meta) => match &mut self.overlay {
@@ -2698,6 +2782,35 @@ fn move_sel(selected: &mut usize, len: usize, key: KeyEvent) {
         KeyCode::End | KeyCode::Char('G') => *selected = len - 1,
         _ => {}
     }
+}
+
+fn clamp_scroll_delta(scroll: u16, delta: isize, max_scroll: u16) -> u16 {
+    if delta >= 0 {
+        (scroll as usize)
+            .saturating_add(delta as usize)
+            .min(max_scroll as usize) as u16
+    } else {
+        scroll.saturating_sub((-delta) as u16)
+    }
+}
+
+fn ensure_child_visible(
+    selected: &usize,
+    scroll: &mut usize,
+    len: usize,
+    rows: usize,
+) {
+    if len == 0 || rows == 0 {
+        *scroll = 0;
+        return;
+    }
+    let max_scroll = len.saturating_sub(rows);
+    if *selected < *scroll {
+        *scroll = *selected;
+    } else if *selected >= *scroll + rows {
+        *scroll = selected.saturating_add(1).saturating_sub(rows);
+    }
+    *scroll = (*scroll).min(max_scroll);
 }
 
 fn apply_create_meta(form: &mut IssueForm, meta: CreateMeta, defaults: Option<(&str, &str)>) {
