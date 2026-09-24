@@ -730,8 +730,8 @@ impl App {
             }
             KeyCode::Char('j') | KeyCode::Down => self.move_issue(1),
             KeyCode::Char('k') | KeyCode::Up => self.move_issue(-1),
-            KeyCode::PageDown => self.move_issue(10),
-            KeyCode::PageUp => self.move_issue(-10),
+            KeyCode::PageDown => self.page_issue(1),
+            KeyCode::PageUp => self.page_issue(-1),
             KeyCode::Char('g') => self.move_issue_abs(0),
             KeyCode::Char('G') => {
                 if let Some(tab) = self.current_tab() {
@@ -1503,6 +1503,36 @@ impl App {
         let next = tab.selected as isize + delta;
         tab.selected = next.clamp(0, tab.issues.len() as isize - 1) as usize;
         self.maybe_load_more_at_end();
+    }
+
+    /// PageUp/PageDown: first press moves focus to the viewport edge; further
+    /// presses while on that edge scroll one page, keeping focus on the new edge.
+    fn page_issue(&mut self, direction: isize) {
+        let page = self.list_rows.max(1);
+        let offset = self.list_offset;
+        let Some(tab) = self.current_tab() else {
+            return;
+        };
+        if tab.issues.is_empty() {
+            return;
+        }
+        let last = tab.issues.len() - 1;
+        let top = offset.min(last);
+        let bottom = offset.saturating_add(page).saturating_sub(1).min(last);
+        let selected = tab.selected;
+
+        let target = if direction > 0 {
+            if selected < bottom {
+                bottom
+            } else {
+                selected.saturating_add(page).min(last)
+            }
+        } else if selected > top {
+            top
+        } else {
+            selected.saturating_sub(page)
+        };
+        self.move_issue_abs(target);
     }
 
     fn move_issue_abs(&mut self, idx: usize) {

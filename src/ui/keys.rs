@@ -3,7 +3,7 @@ use ratatui::text::Line;
 pub const HELP_LINES: &[&str] = &[
     "Navigation",
     "  j / k / Down / Up     move selection",
-    "  PageUp / PageDown     jump",
+    "  PageUp / PageDown     scroll by page",
     "  g / G                 top / bottom",
     "  h / l / ← / →         previous / next sprint or backlog",
     "  Tab / Shift+Tab       next / previous sprint or backlog",
