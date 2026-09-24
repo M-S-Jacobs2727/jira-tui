@@ -372,7 +372,16 @@ impl SearchBuilder {
         }
         match &self.sprint {
             Some(SprintRef::Id(id)) => clauses.push(format!("sprint = {id}")),
-            Some(SprintRef::Backlog) => clauses.push("sprint is EMPTY".into()),
+            // Include never-sprinted issues and those left only on closed sprints.
+            // `sprint is EMPTY` alone misses the latter (Sprint retains closed history).
+            // Done items stay off the backlog (matches Jira board backlog).
+            Some(SprintRef::Backlog) => {
+                clauses.push(
+                    "(sprint is EMPTY OR (sprint not in openSprints() AND sprint not in futureSprints()))"
+                        .into(),
+                );
+                clauses.push("statusCategory != Done".into());
+            }
             None => {}
         }
         if let Some(text) = &self.text {
@@ -798,7 +807,10 @@ mod tests {
             .text("abc-12")
             .order_by(SortField::Key, SortDir::Asc)
             .build();
-        assert!(req.jql.contains("sprint is EMPTY"));
+        assert!(req.jql.contains(
+            "(sprint is EMPTY OR (sprint not in openSprints() AND sprint not in futureSprints()))"
+        ));
+        assert!(req.jql.contains("statusCategory != Done"));
         assert!(req.jql.contains("key = \"ABC-12\""));
         assert!(req.jql.contains("ORDER BY key ASC"));
     }
@@ -811,7 +823,10 @@ mod tests {
             .order_by(SortField::Default, SortDir::Desc)
             .build();
         assert!(req.jql.contains("project = \"ABC\""));
-        assert!(req.jql.contains("sprint is EMPTY"));
+        assert!(req.jql.contains(
+            "(sprint is EMPTY OR (sprint not in openSprints() AND sprint not in futureSprints()))"
+        ));
+        assert!(req.jql.contains("statusCategory != Done"));
         assert!(req.jql.contains("ORDER BY Rank ASC"));
     }
 
